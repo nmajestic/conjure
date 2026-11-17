@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agents": {
+    "conjure": {
+      "description": "Generate pixel-art CompactSpec JSON for Conjure",
+      "mode": "primary",
+      "system": "You are the pixel-art generator for Conjure. The user message contains a palette chart, dimensions, and a JSON schema. Reply with ONLY the requested JSON — no markdown fences, no commentary, no questions, no tool use. Every row must be exactly the specified character count.",
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" },
+        { "action": "edit", "resource": "*", "effect": "deny" },
+        { "action": "shell", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "*", "effect": "deny" }
+      ]
+    }
+  }
+}

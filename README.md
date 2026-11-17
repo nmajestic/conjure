@@ -6,7 +6,7 @@ Conjure makes pixel art a *deterministic, spec-driven* problem instead of a prom
 
 ## Status
 
-Early development. Milestones 1a and 1b are implemented: `conjure-core` (spec, StyleCard, asset model, compact spec, verifier, generator, repair), `conjure-inference`, `conjure-agent`, and `conjure-cli` are built and tested. `conjure-store`, `conjure-export`, `conjure-mcp`, and `conjure-app` are still planned; the stack and milestones are described in [docs/architecture.md](docs/architecture.md).
+Early development. Milestones 1a–1c are implemented: `conjure-core` (spec, StyleCard, asset model, compact spec, verifier, generator, repair), `conjure-inference` (HTTP + OpenCode backends), `conjure-agent`, and `conjure-cli` (generate, validate, repair, models, agent) are built and tested. `conjure-store`, `conjure-export`, `conjure-mcp`, and `conjure-app` are still planned; the stack and milestones are described in [docs/architecture.md](docs/architecture.md).
 
 ## Why Conjure
 
@@ -17,7 +17,7 @@ Pixel art is uniquely hard for image models: they blur grids, drift palettes, an
 | Path | What it is |
 |---|---|
 | `conjure-core/` | Pure engine: spec, StyleCard, compact spec, asset model, verifier, generator, repair. No I/O. |
-| `conjure-inference/` | Thin OpenAI-compatible client + local-server discovery. |
+| `conjure-inference/` | Local backends: OpenAI-compatible HTTP client + server discovery, OpenCode CLI driver. No API key. |
 | `conjure-agent/` | Hand-rolled generate → validate → repair loop. |
 | `conjure-cli/` | Headless CLI: generate, validate, repair, models, agent. |
 | `conjure-store/` | Persistence and versioning (planned). |

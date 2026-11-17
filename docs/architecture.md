@@ -29,7 +29,7 @@ failed in a way the agent can act on.
 |---|---|---|
 | Language | Rust, edition 2024 | One language across UI, core, MCP, CLI. |
 | **UI** | **Rune** (git dep, pinned rev) | GPU-rendered (wgpu), Taffy layout, Parley text, spring animation; macOS/Win/Linux + WebGPU. Headless rendering lets an agent inspect and test the UI. |
-| **Inference client** | Hand-rolled `conjure-inference` (`reqwest` + `tokio`) | Thin OpenAI-compatible client + local-server discovery. No API key. |
+| **Inference client** | Hand-rolled `conjure-inference` (`reqwest` + `tokio`) | Two local backends: OpenAI-compatible client + local-server discovery, and an OpenCode CLI driver. No API key. |
 | **Agent loop** | Hand-rolled `conjure-agent` | Prompt → compact spec → expand → verify → repair. No LLM framework. |
 | **Tool-callable surface** | **rmcp** (official MCP Rust SDK) | Exposes Conjure as an MCP server (stdio + Streamable HTTP). |
 | Async runtime | tokio | Needed for `reqwest` and `rmcp`. |
@@ -50,7 +50,7 @@ for the desktop UI. Swapping clients later would be churn.
 ```
 conjure/
   conjure-core/       # Spec, StyleCard, asset model, verifier, generator, repair (pure, no I/O)
-  conjure-inference/  # thin OpenAI-compatible client + local server discovery (no API key)
+  conjure-inference/  # backends: OpenAI-compatible HTTP client + local server discovery + OpenCode CLI (no API key)
   conjure-agent/      # hand-rolled agent loop, prompts, repair (no LLM framework)
   conjure-mcp/        # rmcp server wrapping core (tool-callable surface)
   conjure-store/      # SQLite + file store, versioning
@@ -62,19 +62,20 @@ conjure/
 Dependencies point *inward*: `app`/`mcp`/`cli` → `agent` → `inference` + `core`;
 everything → `store`/`export`. `core` depends only on `serde`.
 
-**Current state:** milestones 1a and 1b are implemented — `conjure-core`
-(including the `compact` module), `conjure-inference`, `conjure-agent`, and
-`conjure-cli` (including the `models` and `agent` commands) all exist and are
-tested. `conjure-store`, `conjure-export`, `conjure-mcp`, and `conjure-app`
-are still planned.
+**Current state:** milestones 1a, 1b, and 1c are implemented — `conjure-core`
+(including the `compact` module), `conjure-inference` (HTTP and OpenCode
+backends), `conjure-agent`, and `conjure-cli` (including the `models` and
+`agent` commands) all exist and are tested. `conjure-store`, `conjure-export`,
+`conjure-mcp`, and `conjure-app` are still planned.
 
 ## Inference layer — local, no API key (inspired by T3 Code)
 
-Conjure does not run models and does not require an API key. It speaks the
-OpenAI-compatible API to whatever local inference server the user already runs
-— Ollama, LM Studio, llama.cpp, vLLM, or SGLang — the way
+Conjure does not run models and does not require an API key. It either speaks
+the OpenAI-compatible API to whatever local inference server the user already
+runs — Ollama, LM Studio, llama.cpp, vLLM, or SGLang — the way
 [T3 Code](https://github.com/MiaAI-Lab/t3code) does: a thin client that drives
-the user's server and discovers it automatically.
+the user's server and discovers it automatically; or it drives the local
+OpenCode agent CLI (see Backends below).
 
 - **`conjure-inference`**
   - Keyless client (`Client::new(base_url, model)`): OpenAI-compatible
@@ -93,15 +94,34 @@ the user's server and discovers it automatically.
   - Tested against an in-process `httpmock` mock OpenAI-compatible server —
     never a real model.
 
-**CLI surface (1b):** `conjure models` lists discovered local servers and
-their models; `conjure agent <request.json> --base-url <url> --model <id>`
-runs the agent loop for a request file. Both flags are required.
+### Backends (milestone 1c, decided 2026-11-16)
+
+`conjure-inference` exposes a `Backend` enum with two variants:
+
+- **`Http(Client)`** — unchanged from 1b: the keyless OpenAI-compatible client
+  for localhost servers, over `reqwest` + `tokio`.
+- **`OpenCode(OpenCodeCli)`** — drives the local OpenCode agent CLI as a
+  subprocess: `opencode run --format json --archived --model <provider/model>
+  --agent conjure`. The process is killed after 180 seconds. Output is NDJSON;
+  the reply text is read from `part.text` on `type:"text"` lines. The binary is
+  injectable via `CONJURE_OPENCODE_BIN`. Conjure never handles credentials —
+  OpenCode owns all auth. Multi-turn repair conversations are stateless: the
+  full history is folded into each run's prompt. A minimal no-tools `conjure`
+  agent is defined in the project `.opencode/opencode.json` — OpenCode
+  discovers that config from the working directory upward, so the CLI must
+  run from inside the Conjure project (known limitation: `--agent conjure`
+  does not resolve elsewhere).
+
+**CLI surface (1b–1c):** `conjure models` lists both discovered local servers
+and OpenCode models; `conjure agent <request.json> --provider opencode --model
+<id>` runs the agent loop through the OpenCode backend. The HTTP path is
+unchanged from 1b: `conjure agent <request.json> --base-url <url> --model <id>`.
 
 **What we give up vs. Rig, and how we replace it:**
 
 | Rig feature | Our replacement |
 |---|---|
-| Multi-provider abstraction | Not needed — local OpenAI-compatible only |
+| Multi-provider abstraction | Not needed — local backends only (OpenAI-compatible servers, OpenCode CLI) |
 | Structured extraction | "Return JSON" + lenient parse + re-prompt on failure |
 | `mock`/`cassette` test harness | In-process mock OpenAI-compatible server |
 
@@ -153,10 +173,12 @@ AssetRequest┘        │                                            │
    prove generate → validate → repair with no model at all (pure Rust).
 2. **1b — `conjure-inference` + `conjure-agent`:** swap the deterministic
    generator for a real local model; still no API key.
-3. **2 — `conjure-store` + `conjure-export`:** persistence, versioning,
+3. **1c — OpenCode provider:** second `conjure-inference` backend that drives
+   the local OpenCode agent CLI; still no API key.
+4. **2 — `conjure-store` + `conjure-export`:** persistence, versioning,
    PNG/manifest export.
-4. **3 — `conjure-mcp`:** tool-callable surface.
-5. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune.
+5. **3 — `conjure-mcp`:** tool-callable surface.
+6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune.
 
 ## Risks
 

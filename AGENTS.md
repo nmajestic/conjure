@@ -3,6 +3,13 @@
 Read [docs/codebase-rules.md](docs/codebase-rules.md) before making changes.
 Product vision: [docs/product-brief.md](docs/product-brief.md). Architecture: [docs/architecture.md](docs/architecture.md).
 
+## Ground Rules
+
+- No API keys, ever. Conjure requires no credentials and never stores or
+  transmits them; it talks to local OpenAI-compatible inference servers or
+  drives a local agent CLI (OpenCode), which owns all auth. No cloud endpoints,
+  secret handling, or key-assuming SDKs in Conjure.
+
 ## Mandatory Build Workflow (`static-fire` → `liftoff` → `max-q` → `catch`)
 
 All build, implementation, scaffolding, bug-fix, and refactoring requests must

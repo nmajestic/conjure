@@ -38,9 +38,12 @@ app / mcp / cli  →  agent  →  inference + core  →  store / export
 
 ## 4. No API keys, local-first
 
-- Conjure never requires an API key and never runs a model itself.
+- Conjure never requires an API key and never runs a model itself; it never
+  stores or transmits credentials of any kind.
 - It speaks the OpenAI-compatible API to a *local* inference server (Ollama, LM
-  Studio, llama.cpp, vLLM, SGLang). No cloud endpoints, no secret storage.
+  Studio, llama.cpp, vLLM, SGLang), or drives a *local* agent CLI (OpenCode),
+  which owns all auth. No cloud endpoints, no secret handling, no key-assuming
+  SDKs in Conjure.
 - HTTP is done with `reqwest` + `tokio` (decided 2026-11-16).
 
 ## 5. Determinism
