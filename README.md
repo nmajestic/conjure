@@ -6,24 +6,24 @@ Conjure makes pixel art a *deterministic, spec-driven* problem instead of a prom
 
 ## Status
 
-Early development — planning only. No code has been written yet; the stack and milestones are described in [docs/architecture.md](docs/architecture.md).
+Early development. Milestones 1a and 1b are implemented: `conjure-core` (spec, StyleCard, asset model, compact spec, verifier, generator, repair), `conjure-inference`, `conjure-agent`, and `conjure-cli` are built and tested. `conjure-store`, `conjure-export`, `conjure-mcp`, and `conjure-app` are still planned; the stack and milestones are described in [docs/architecture.md](docs/architecture.md).
 
 ## Why Conjure
 
 Pixel art is uniquely hard for image models: they blur grids, drift palettes, and can't keep a whole set consistent. Conjure reframes generation as constraint-satisfaction — a verifier enforces grid, palette, and structure, and the agent repairs until it passes.
 
-## Planned layout
+## Layout
 
 | Path | What it is |
 |---|---|
-| `conjure-core/` | Pure engine: spec, StyleCard, asset model, verifier. No I/O. |
+| `conjure-core/` | Pure engine: spec, StyleCard, compact spec, asset model, verifier, generator, repair. No I/O. |
 | `conjure-inference/` | Thin OpenAI-compatible client + local-server discovery. |
 | `conjure-agent/` | Hand-rolled generate → validate → repair loop. |
-| `conjure-mcp/` | Tool-callable MCP server. |
-| `conjure-store/` | Persistence and versioning. |
-| `conjure-export/` | PNG/manifest/engine export. |
-| `conjure-cli/` | Headless CLI surface over the core. |
-| `conjure-app/` | Rune desktop UI. |
+| `conjure-cli/` | Headless CLI: generate, validate, repair, models, agent. |
+| `conjure-store/` | Persistence and versioning (planned). |
+| `conjure-export/` | PNG/manifest/engine export (planned). |
+| `conjure-mcp/` | Tool-callable MCP server (planned). |
+| `conjure-app/` | Rune desktop UI (planned). |
 | `docs/` | Product brief, architecture, codebase rules. |
 
 ## Documentation

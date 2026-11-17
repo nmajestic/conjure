@@ -11,8 +11,8 @@ The workspace is layered. Dependencies point *inward* only:
 app / mcp / cli  →  agent  →  inference + core  →  store / export
 ```
 
-- `conjure-core` depends only on `serde`, `image`, `png` — nothing else.
-- `conjure-inference` depends on `reqwest` and `serde`/`serde_json`, plus `core`.
+- `conjure-core` depends only on `serde` — nothing else.
+- `conjure-inference` depends on `reqwest`, `tokio`, and `serde`/`serde_json`.
 - `conjure-agent` depends on `inference` and `core`.
 - `conjure-mcp`, `conjure-cli`, `conjure-app` are shells: no business logic.
 - A lower crate must never depend on a higher one.
@@ -53,9 +53,13 @@ app / mcp / cli  →  agent  →  inference + core  →  store / export
 
 - Canonical form is **indexed pixels + palette map**: each pixel is an index
   into the Style Card palette, never raw RGBA.
-- The model emits a *compact declarative spec*; `conjure-core` expands it
-  deterministically into the indexed grid. Models must not be asked for raw
+- The model emits a *compact declarative spec*: a `CompactSpec` of ASCII
+  rows, one char per pixel (`'0'`–`'9'` are palette indices 0–9, `'a'`–`'v'`
+  are 10–31) — never raw index arrays, and models must not be asked for raw
   pixel grids.
+- `conjure-core` expands the spec deterministically into the indexed grid.
+  Expansion is strict: dimension, char, and palette-range errors become
+  actionable repair messages for the agent.
 - Preserve this representation; converting to RGBA happens only at export time.
 
 ## 7. Dependencies

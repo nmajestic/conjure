@@ -60,10 +60,13 @@ conjure/
 ```
 
 Dependencies point *inward*: `app`/`mcp`/`cli` → `agent` → `inference` + `core`;
-everything → `store`/`export`. `core` depends only on `serde`, `image`, `png`.
+everything → `store`/`export`. `core` depends only on `serde`.
 
-**Current state:** planning only — no code has been written yet. All crates
-above are planned.
+**Current state:** milestones 1a and 1b are implemented — `conjure-core`
+(including the `compact` module), `conjure-inference`, `conjure-agent`, and
+`conjure-cli` (including the `models` and `agent` commands) all exist and are
+tested. `conjure-store`, `conjure-export`, `conjure-mcp`, and `conjure-app`
+are still planned.
 
 ## Inference layer — local, no API key (inspired by T3 Code)
 
@@ -74,16 +77,25 @@ OpenAI-compatible API to whatever local inference server the user already runs
 the user's server and discovers it automatically.
 
 - **`conjure-inference`**
-  - OpenAI-compatible `chat/completions`.
-  - **Local server discovery:** probe the usual ports (Ollama `11434`, LM
-    Studio `1234`, llama.cpp `8080`, vLLM `8000`) and read `GET /v1/models`.
-  - **Config** (`base_url`, `model`, optional `api_key`, `context_window`,
-    `max_tokens`); local endpoints need no key.
+  - Keyless client (`Client::new(base_url, model)`): OpenAI-compatible
+    `chat/completions`, 180-second timeout, and **no `Authorization` header
+    ever** — there is no code path that could send an API key.
+  - **Local server discovery:** `discover(local_urls())` probes the usual
+    ports (Ollama `11434`, LM Studio `1234`, llama.cpp `8080`, vLLM `8000`)
+    and reads `GET /v1/models`.
 - **`conjure-agent`**
-  - Build prompt (system + `AssetRequest`/`StyleCard`) → ask for a **compact
-    spec as JSON** → expand deterministically in core → verify → feed
-    diagnostics back as a repair turn (bounded retries) → deterministic
-    safety-net repair.
+  - The loop: build prompt (system + `AssetRequest`/`StyleCard`) → ask for a
+    **compact spec as JSON** → parse the reply leniently (code fences and
+    surrounding prose are tolerated) → expand strictly in core → verify →
+    feed failures back as repair turns (up to 3 by default) → deterministic
+    safety-net fallback (core `repair`/`generate`) if the model never
+    succeeds.
+  - Tested against an in-process `httpmock` mock OpenAI-compatible server —
+    never a real model.
+
+**CLI surface (1b):** `conjure models` lists discovered local servers and
+their models; `conjure agent <request.json> --base-url <url> --model <id>`
+runs the agent loop for a request file. Both flags are required.
 
 **What we give up vs. Rig, and how we replace it:**
 
@@ -99,11 +111,18 @@ the user's server and discovers it automatically.
 Style Card palette. Palette fidelity is structural; sprites are tiny and
 diffable; PNG export is a deterministic index → RGBA expansion.
 
-**The model does not emit raw grids.** It emits a *compact declarative spec*
-(run-length lines, symmetry, or a tiny draw program) that `conjure-core`
-expands deterministically into the indexed grid, then the verifier checks the
-result. Fallback: the model emits the grid as JSON indices and repair fixes
-off-palette/off-grid pixels.
+**The model does not emit raw grids.** It emits a `CompactSpec` (decided
+2026-11-16, implemented in `conjure-core::compact`): ASCII rows, one char per
+pixel. Chars `'0'..='9'` map to palette indices 0–9 and `'a'..='v'` to
+indices 10–31 (32 colors max). The variants mirror `AssetKind`: a sprite is
+`{"type":"sprite","rows":[...]}` and a tileset is
+`{"type":"tileset","tiles":[[...],...]}` (one row-list per tile).
+
+`conjure-core::compact::expand` expands the spec **strictly** into the
+indexed grid, then the verifier checks the result. Dimension, char, and
+palette-range errors are actionable messages that the agent feeds back as
+repair turns. The original fallback in this decision — the model emitting
+the grid as raw JSON index arrays — was considered and not chosen.
 
 ## Runtime / threading model
 
