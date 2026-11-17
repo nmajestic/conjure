@@ -1,0 +1,25 @@
+{
+  "name": "demo",
+  "kind": { "type": "tileset", "tile_size": { "w": 8, "h": 8 }, "count": 3 },
+  "style_card": {
+    "id": "demo-palette",
+    "name": "Demo palette",
+    "palette": [
+      { "name": "background", "hex": "#101010" },
+      { "name": "outline", "hex": "#000000" },
+      { "name": "stone", "hex": "#6d6d6d" },
+      { "name": "stone-light", "hex": "#9a9a9a" },
+      { "name": "moss", "hex": "#4a6a2a" },
+      { "name": "moss-light", "hex": "#8fce4a" }
+    ],
+    "grid": { "tile_size": { "w": 8, "h": 8 }, "unit_scale": 1 },
+    "style": {
+      "outline": "one",
+      "outline_color": "#000000",
+      "shading": "two_tone",
+      "proportions": "chibi",
+      "era": "16-bit",
+      "theme": "dungeon"
+    }
+  }
+}

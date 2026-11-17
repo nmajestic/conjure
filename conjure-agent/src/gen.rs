@@ -20,7 +20,7 @@ pub struct GenResult {
 }
 
 pub async fn generate(
-    client: &conjure_inference::Client,
+    backend: &conjure_inference::Backend,
     request: &AssetRequest,
     opts: &GenOpts,
 ) -> Result<GenResult, String> {
@@ -32,7 +32,7 @@ pub async fn generate(
     let mut last_assets: Option<Vec<Asset>> = None;
 
     for attempt in 0..=opts.max_repairs {
-        let reply = client.chat(&messages).await?;
+        let reply = backend.chat(&messages).await?;
 
         let spec = match parse_spec(&reply) {
             Ok(spec) => spec,
@@ -192,11 +192,11 @@ mod tests {
         }
     }
 
-    fn test_client(server: &MockServer) -> conjure_inference::Client {
-        conjure_inference::Client {
+    fn test_client(server: &MockServer) -> conjure_inference::Backend {
+        conjure_inference::Backend::Http(conjure_inference::Client {
             base_url: server.base_url(),
             model: "mock-model".to_string(),
-        }
+        })
     }
 
     fn completion(reply: &str) -> serde_json::Value {
@@ -263,10 +263,10 @@ mod tests {
     async fn happy_path_sprite_passes_on_first_reply() {
         let server = MockServer::start();
         let mock = mock_chat(&server, SPRITE_SPEC);
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = sprite_request();
 
-        let result = generate(&client, &request, &GenOpts::default())
+        let result = generate(&backend, &request, &GenOpts::default())
             .await
             .unwrap();
 
@@ -293,10 +293,10 @@ mod tests {
                 .body_includes("spec rejected");
             then.status(200).json_body(completion(SPRITE_SPEC));
         });
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = sprite_request();
 
-        let result = generate(&client, &request, &GenOpts::default())
+        let result = generate(&backend, &request, &GenOpts::default())
             .await
             .unwrap();
 
@@ -310,10 +310,10 @@ mod tests {
     async fn invalid_json_every_time_falls_back_to_deterministic_assets() {
         let server = MockServer::start();
         let mock = mock_chat(&server, GARBAGE_REPLY);
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = sprite_request();
 
-        let result = generate(&client, &request, &GenOpts::default())
+        let result = generate(&backend, &request, &GenOpts::default())
             .await
             .unwrap();
 
@@ -327,10 +327,10 @@ mod tests {
     async fn wrong_row_count_every_time_falls_back() {
         let server = MockServer::start();
         let mock = mock_chat(&server, SPRITE_SPEC_BAD_ROW_COUNT);
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = sprite_request();
 
-        let result = generate(&client, &request, &GenOpts::default())
+        let result = generate(&backend, &request, &GenOpts::default())
             .await
             .unwrap();
 
@@ -347,10 +347,10 @@ mod tests {
             when.method(Method::POST).path("/chat/completions");
             then.status(500);
         });
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = sprite_request();
 
-        let result = generate(&client, &request, &GenOpts::default()).await;
+        let result = generate(&backend, &request, &GenOpts::default()).await;
 
         assert!(result.is_err());
     }
@@ -359,10 +359,10 @@ mod tests {
     async fn happy_path_tileset_passes_with_count_tiles() {
         let server = MockServer::start();
         let mock = mock_chat(&server, TILESET_SPEC);
-        let client = test_client(&server);
+        let backend = test_client(&server);
         let request = tileset_request();
 
-        let result = generate(&client, &request, &GenOpts::default())
+        let result = generate(&backend, &request, &GenOpts::default())
             .await
             .unwrap();
 

@@ -10,7 +10,12 @@ usage:
   conjure validate <request.json> <assets.json>
   conjure repair <request.json> <assets.json>
   conjure models
-  conjure agent <request.json> --base-url <url> --model <id>";
+  conjure agent <request.json> --base-url <url> --model <id>
+  conjure agent <request.json> --provider opencode --model <id>";
+
+const AGENT_USAGE: &str = "\
+usage: conjure agent <request.json> --base-url <url> --model <id>
+       conjure agent <request.json> --provider opencode --model <id>";
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().collect();
@@ -131,27 +136,81 @@ fn run_models(argv: &[String]) -> ExitCode {
     };
     let urls = conjure_inference::local_urls();
     let servers = runtime.block_on(conjure_inference::discover(&urls));
-    let mut found = 0;
+    let mut local_found = 0;
     for server in &servers {
-        for model in &server.models {
-            println!("{} {}", server.base_url, model);
-            found += 1;
+        local_found += server.models.len();
+    }
+    if local_found > 0 {
+        println!("local servers:");
+        for server in &servers {
+            for model in &server.models {
+                println!("{} {}", server.base_url, model);
+            }
         }
     }
-    if found == 0 {
+
+    let opencode_models = match runtime.block_on(conjure_inference::list_opencode_models(
+        &conjure_inference::opencode_bin(),
+    )) {
+        Ok(models) => models,
+        Err(e) => {
+            eprintln!("opencode models unavailable: {e}");
+            Vec::new()
+        }
+    };
+    if !opencode_models.is_empty() {
+        println!("opencode models:");
+        for model in &opencode_models {
+            println!("{model}");
+        }
+    }
+
+    if local_found == 0 && opencode_models.is_empty() {
         eprintln!(
-            "no local model servers found (tried the usual ports — run ollama/lmstudio/llama.cpp first)"
+            "no local model servers and no opencode models found (tried the usual ports — run ollama/lmstudio/llama.cpp, or install opencode)"
         );
         return ExitCode::from(2);
     }
     ExitCode::SUCCESS
 }
 
-fn run_agent(argv: &[String]) -> ExitCode {
-    if argv.len() != 7 || argv[3] != "--base-url" || argv[5] != "--model" {
-        eprintln!("usage: conjure agent <request.json> --base-url <url> --model <id>");
-        return ExitCode::from(2);
+enum AgentSpec<'a> {
+    Http { base_url: &'a str, model: &'a str },
+    OpenCode { model: &'a str },
+}
+
+fn agent_spec(argv: &[String]) -> Option<AgentSpec<'_>> {
+    if argv.len() != 7 || argv[5] != "--model" {
+        return None;
     }
+    match argv[3].as_str() {
+        "--base-url" => Some(AgentSpec::Http {
+            base_url: &argv[4],
+            model: &argv[6],
+        }),
+        "--provider" if argv[4] == "opencode" => Some(AgentSpec::OpenCode { model: &argv[6] }),
+        _ => None,
+    }
+}
+
+impl<'a> AgentSpec<'a> {
+    fn backend(self) -> conjure_inference::Backend {
+        match self {
+            AgentSpec::Http { base_url, model } => {
+                conjure_inference::Backend::Http(conjure_inference::Client::new(base_url, model))
+            }
+            AgentSpec::OpenCode { model } => conjure_inference::Backend::OpenCode(
+                conjure_inference::OpenCodeCli::new(conjure_inference::opencode_bin(), model),
+            ),
+        }
+    }
+}
+
+fn run_agent(argv: &[String]) -> ExitCode {
+    let Some(spec) = agent_spec(argv) else {
+        eprintln!("{AGENT_USAGE}");
+        return ExitCode::from(2);
+    };
     let request = match read_json::<AssetRequest>(&argv[2]) {
         Ok(r) => r,
         Err(e) => return err(&e),
@@ -164,9 +223,9 @@ fn run_agent(argv: &[String]) -> ExitCode {
         Ok(rt) => rt,
         Err(e) => return err(&e.to_string()),
     };
-    let client = conjure_inference::Client::new(argv[4].as_str(), argv[6].as_str());
+    let backend = spec.backend();
     let result = match runtime.block_on(conjure_agent::generate(
-        &client,
+        &backend,
         &request,
         &conjure_agent::GenOpts::default(),
     )) {
