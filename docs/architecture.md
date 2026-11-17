@@ -176,8 +176,9 @@ AssetRequest┘        │                                            │
 3. **1c — OpenCode provider:** second `conjure-inference` backend that drives
    the local OpenCode agent CLI; still no API key.
 4. **2 — `conjure-store` + `conjure-export`:** persistence, versioning,
-   PNG/manifest export.
-5. **3 — `conjure-mcp`:** tool-callable surface.
+   PNG/manifest export. Full spec: [milestone-2.md](milestone-2.md).
+5. **3 — `conjure-mcp`:** tool-callable surface. Full spec:
+   [milestone-3.md](milestone-3.md).
 6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune.
 
 ## Risks
