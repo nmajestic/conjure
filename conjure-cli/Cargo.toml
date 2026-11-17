@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+conjure-agent = { path = "../conjure-agent" }
 conjure-core = { path = "../conjure-core" }
+conjure-inference = { path = "../conjure-inference" }
 serde = "1"
 serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
