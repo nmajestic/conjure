@@ -1,0 +1,9 @@
+[package]
+name = "conjure-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conjure-core = { path = "../conjure-core" }
+serde = "1"
+serde_json = "1"
