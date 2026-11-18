@@ -1,27 +1,29 @@
 # Conjure Terrain Map
 
-Last Synced Commit: 87487c6ed361da24d11f2748cced14870b9a4403
+Last Synced Commit: b916da19da0d854290bda4fd825fd15e0148dbc0
 
 ## System Architecture & Control Flow
 
-Rust workspace (resolver "3", edition 2024): `conjure-core` ← `conjure-inference` ← `conjure-agent` ← `conjure-cli`; leaves `conjure-store`/`conjure-export` depend only on core. Entry: `conjure-cli/src/main.rs` hand-rolled `env::args()` dispatch (`generate|validate|repair|models|agent|init|save|ls|show|export|tag|gc`). Agent loop `conjure-agent/src/gen.rs`: chat → parse compact spec → expand → verify → repair turns → seeded fallback; `Backend` enum (`Http(Client)`/`OpenCode(OpenCodeCli)`) is the only inference abstraction. Store: project-local `.conjure/` (SQLite via rusqlite, WAL; content-addressed BLAKE3 blobs), located by walking cwd upward. Export: indexed PNG (`PLTE`+`tRNS`, png crate) + JSON manifest v1; refuses invalid input, never clamps; 2^26-pixel cap. Exit codes: 0 success; 1 validation-fail with JSON report on stdout (validate, save); 2 every other error (usage/errors on stderr).
+Rust workspace (resolver "3", edition 2024): `conjure-core` ← `conjure-inference` ← `conjure-agent` ← `conjure-cli`; leaves `conjure-store`/`conjure-export` depend only on core; `conjure-mcp` (rmcp 3.11) wraps agent/core/store/export as 12 MCP tools — stdio default, loopback-only Streamable HTTP. Entry: `conjure-cli/src/main.rs` hand-rolled dispatch (`generate|validate|repair|models|agent|init|save|ls|show|export|tag|gc|mcp`); `conjure mcp` and the `conjure-mcp` bin share one `serve_stdio`/`serve_http`. Store: project-local `.conjure/` (SQLite WAL + BLAKE3 blobs), located by walking cwd upward. Export: indexed PNG (`PLTE`+`tRNS`, png crate) + manifest v1; refuses, never clamps; 2^26-pixel cap. Exit codes: 0 success; 1 validation-fail JSON on stdout (validate, save); 2 everything else.
 
 ## Canonical Data Models & Contracts
 
-conjure-core re-exports: `Asset{style_card_id,width,height,pixels}` (palette indices), `AssetRequest{name,kind,style_card}`, `StyleCard` + `validate`, `ValidationReport{passed,errors}`. `AssetKind`/`CompactSpec` internally tagged `#[serde(tag="type",rename_all="snake_case")]`. Core depends only on `serde`; errors are `Result<T,String>`. Store: `Store` (open/create, save_card/save_assets, load/list/asset_summary, tag/gc, resolve_card/resolve_asset), `StoreError` (NotFound/Invalid/Corrupt/Io/Sqlite/Verify via `Verification`), hashes `asset_hash`/`card_hash`/`blob_hash` (BLAKE3 over 16-byte magics). Export: `SheetLayout`, `ExportOpts`, `export_png`, `export_manifest(card,assets,names,opts)`, `Manifest` v1 structs, `ExportError`, `encode_indexed_png`/`decode_indexed_png`.
+conjure-core: `Asset{style_card_id,width,height,pixels}`, `AssetRequest{name,kind,style_card}`, `StyleCard`+`validate`, `ValidationReport{passed,errors}`; internally tagged `#[serde(tag="type",rename_all="snake_case")]`; core is serde-only, `Result<T,String>`. Store: `Store` (open/create, save/load/list/asset_summary, tag/gc, resolve_card/resolve_asset), `StoreError` (NotFound/Invalid/Corrupt/Io/Sqlite/Verify), BLAKE3 hashes with 16-byte magics. Export: `SheetLayout`, `ExportOpts`, `export_png`, `export_manifest(card,assets,names,opts)`, `Manifest` v1, `encode/decode_indexed_png`. MCP: `ConjureMcp{root,tool_router}`, `serve_stdio/serve_http/check_loopback`; tool inputs are `serde_json::Value` parsed strictly into core types (core has no JsonSchema derives); two-bucket results — validation failures are successful tool results with report bodies, everything else is caller-visible `error:` text.
 
 ## Reusable Utilities & Repo Conventions
 
-`PaletteColor::rgb()`; `StyleCard::validate`; CLI helpers `read_json`/`print_json`/`err`/`safe_output_stem`. Test discipline: inline `#[cfg(test)]` in-crate plus `conjure-cli/tests/cli.rs` binary integration tests (spawn `CARGO_BIN_EXE_conjure-cli` in nonce temp dirs with Drop cleanup; no tempfile dep). httpmock 0.8; stub-binary harness in `conjure-inference/src/opencode.rs`. Commits (§15): lowercase `<label>(<scope>): <description>`, imperative, no trailing period; never push. No comments unless a non-obvious why. Docs update in the same change.
+`PaletteColor::rgb()`; CLI helpers `read_json`/`print_json`/`err`/`safe_output_stem`. Test discipline: inline `#[cfg(test)]` plus binary/integration tests spawning real processes — `conjure-cli/tests/cli.rs` (CARGO_BIN_EXE_conjure-cli) and `conjure-mcp/tests/client.rs` (in-process rmcp client over tokio duplex); nonce temp dirs with Drop cleanup; no tempfile dep. httpmock 0.8; stub-binary harness in `conjure-inference/src/opencode.rs`. Commits (§15): lowercase `<label>(<scope>): <description>`, imperative, no trailing period; never push. No comments unless a non-obvious why. Docs update in the same change.
 
 ## Known Landmines & Coupling Points
 
-- Workspace `members` list is manual; forgetting a new crate silently drops it from `cargo test --workspace`.
-- conjure-agent `gen`/`prompt` private. Core stays untouched: store/export wrap types in their own envelopes.
+- Workspace `members` list is manual; forgetting a crate drops it from `cargo test --workspace`.
+- conjure-agent `gen`/`prompt` private. Core untouched: store/export/mcp wrap types in their own envelopes (store summaries serialize via mcp mapping fns, not serde derives).
 - No clap: positional argv checks; existing commands must stay byte-identical.
-- thiserror in store/export only, never core. `rusqlite` needs `bundled`; `png` (not `image`) is the indexed-PNG encoder — image cannot encode indexed color. Every new dep needs written justification.
-- Hash lookup requires unique prefix ≥ 8 hex chars. `.conjure/` found by walking cwd upward; leave `.gitignore` alone.
-- `cargo check` warns `unused dependency serde_json` for conjure-export (test-only dep; clippy gate passes) — do not "clean it up" by removing it.
+- rmcp pinned 3.11; schemars via rmcp's re-export (`rmcp::schemars`), never a direct dep; `tool_router` field name is macro-required.
+- stdout is the MCP protocol in conjure-mcp — zero println! in lib code; logs only via pre-serve stderr.
+- MCP `conjure_init` per-call root resolves against the session root (relative → join); other tools locate from the server root only.
+- thiserror store/export only; rusqlite bundled; png (not image) for indexed color; hash prefixes ≥ 8 hex unique.
+- `cargo check` warns unused-dep serde_json in conjure-export (test-only; clippy passes) — do not remove it.
 - `CONJURE_OPENCODE_BIN` env knob; `conjure agent --provider opencode` requires repo cwd.
 
 ## Discovered Commands
