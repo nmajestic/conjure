@@ -1,7 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["conjure-core", "conjure-cli", "conjure-inference", "conjure-agent", "conjure-store", "conjure-export", "conjure-mcp"]
+members = ["conjure-core", "conjure-cli", "conjure-inference", "conjure-agent", "conjure-store", "conjure-export", "conjure-mcp", "conjure-app"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+
+# Rune (conjure-app's UI framework) vendors patched copies of these crates; a
+# dependency's own [patch.crates-io] does not apply to this workspace, so the
+# patches are repeated here at the pinned revision.
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "1505f9210322e9bc75bf0f67c4134dde950fa9d2" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "1505f9210322e9bc75bf0f67c4134dde950fa9d2" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "1505f9210322e9bc75bf0f67c4134dde950fa9d2" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "1505f9210322e9bc75bf0f67c4134dde950fa9d2" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "1505f9210322e9bc75bf0f67c4134dde950fa9d2" }

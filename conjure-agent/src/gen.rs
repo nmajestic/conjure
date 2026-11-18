@@ -3,13 +3,35 @@ use conjure_inference::Message;
 
 use crate::prompt::{system_prompt, user_prompt};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenEvent {
+    ModelCall,
+    SpecParsed,
+    VerifyFailed { errors: usize },
+    RepairTurn { turn: u32 },
+    FallbackEngaged,
+    Passed,
+}
+
+pub type GenObserver = std::sync::Arc<dyn Fn(&GenEvent) + Send + Sync>;
+
 pub struct GenOpts {
     pub max_repairs: u32,
+    pub on_event: Option<GenObserver>,
 }
 
 impl Default for GenOpts {
     fn default() -> Self {
-        Self { max_repairs: 3 }
+        Self {
+            max_repairs: 3,
+            on_event: None,
+        }
+    }
+}
+
+fn emit(opts: &GenOpts, event: GenEvent) {
+    if let Some(observer) = &opts.on_event {
+        observer(&event);
     }
 }
 
@@ -32,6 +54,10 @@ pub async fn generate(
     let mut last_assets: Option<Vec<Asset>> = None;
 
     for attempt in 0..=opts.max_repairs {
+        if attempt > 0 {
+            emit(opts, GenEvent::RepairTurn { turn: attempt });
+        }
+        emit(opts, GenEvent::ModelCall);
         let reply = backend.chat(&messages).await?;
 
         let spec = match parse_spec(&reply) {
@@ -44,6 +70,8 @@ pub async fn generate(
                 continue;
             }
         };
+
+        emit(opts, GenEvent::SpecParsed);
 
         let assets = match conjure_core::expand(request, &spec) {
             Ok(assets) => assets,
@@ -58,12 +86,19 @@ pub async fn generate(
 
         let report = conjure_core::verify_request(request, &assets);
         if report.passed {
+            emit(opts, GenEvent::Passed);
             return Ok(GenResult {
                 assets,
                 repairs_used: attempt,
                 used_fallback: false,
             });
         }
+        emit(
+            opts,
+            GenEvent::VerifyFailed {
+                errors: report.errors.len(),
+            },
+        );
         last_assets = Some(assets);
         messages.push(Message::assistant(reply));
         let mut problems = String::from("verification failed with these problems:\n");
@@ -74,6 +109,7 @@ pub async fn generate(
         messages.push(Message::user(problems));
     }
 
+    emit(opts, GenEvent::FallbackEngaged);
     let assets = match last_assets {
         Some(assets) => conjure_core::repair(request, &assets),
         None => conjure_core::generate(request, 0),
@@ -353,6 +389,59 @@ mod tests {
         let result = generate(&backend, &request, &GenOpts::default()).await;
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn gen_opts_default_keeps_prior_behavior() {
+        let default = GenOpts::default();
+        assert_eq!(default.max_repairs, 3);
+        assert!(default.on_event.is_none());
+    }
+
+    #[tokio::test]
+    async fn observer_records_full_event_sequence_for_one_repair() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(Method::POST)
+                .path("/chat/completions")
+                .body_excludes("not valid JSON");
+            then.status(200).json_body(completion(GARBAGE_REPLY));
+        });
+        let repaired = server.mock(|when, then| {
+            when.method(Method::POST)
+                .path("/chat/completions")
+                .body_includes("not valid JSON");
+            then.status(200).json_body(completion(SPRITE_SPEC));
+        });
+        let backend = test_client(&server);
+        let request = sprite_request();
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let opts = GenOpts {
+            on_event: Some(std::sync::Arc::new(move |event: &GenEvent| {
+                sink.lock().unwrap().push(event.clone());
+            })),
+            ..GenOpts::default()
+        };
+
+        let result = generate(&backend, &request, &opts).await.unwrap();
+
+        assert_eq!(result.repairs_used, 1);
+        assert!(!result.used_fallback);
+        assert!(verify_request(&request, &result.assets).passed);
+        let observed = events.lock().unwrap().clone();
+        assert_eq!(
+            observed,
+            vec![
+                GenEvent::ModelCall,
+                GenEvent::RepairTurn { turn: 1 },
+                GenEvent::ModelCall,
+                GenEvent::SpecParsed,
+                GenEvent::Passed,
+            ]
+        );
+        repaired.assert_calls(1);
     }
 
     #[tokio::test]

@@ -223,6 +223,7 @@ impl ConjureMcp {
         };
         let opts = conjure_agent::GenOpts {
             max_repairs: p.max_repairs.unwrap_or(3),
+            on_event: None,
         };
         match conjure_agent::generate(&backend, &request, &opts).await {
             Ok(result) => success(&results::GenOutput {
