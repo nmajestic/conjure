@@ -18,7 +18,8 @@ usage:
   conjure show <hash-or-prefix>
   conjure export <hash-or-prefix>... --out <dir>
   conjure tag <hash-or-prefix> <tag>
-  conjure gc";
+  conjure gc
+  conjure mcp [--root <path>] [--http 127.0.0.1:9711]";
 
 const AGENT_USAGE: &str = "\
 usage: conjure agent <request.json> --base-url <url> --model <id>
@@ -46,6 +47,7 @@ fn main() -> ExitCode {
         "export" => run_export(&args[1..]),
         "tag" => run_tag(&args[1..]),
         "gc" => run_gc(&args[1..]),
+        "mcp" => run_mcp(&args[1..]),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -563,4 +565,64 @@ fn run_gc(args: &[String]) -> ExitCode {
         report.removed, report.kept
     );
     ExitCode::SUCCESS
+}
+
+fn run_mcp(args: &[String]) -> ExitCode {
+    let mut root: Option<std::path::PathBuf> = None;
+    let mut addr: Option<std::net::SocketAddr> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                if root.is_some() {
+                    return err("mcp expects [--root <path>] [--http <addr>]");
+                }
+                let Some(value) = args.get(index + 1) else {
+                    return err("mcp expects [--root <path>] [--http <addr>]");
+                };
+                root = Some(std::path::PathBuf::from(value));
+                index += 2;
+            }
+            "--http" => {
+                if addr.is_some() {
+                    return err("mcp expects [--root <path>] [--http <addr>]");
+                }
+                let Some(value) = args.get(index + 1) else {
+                    return err("mcp expects [--root <path>] [--http <addr>]");
+                };
+                match value.parse::<std::net::SocketAddr>() {
+                    Ok(parsed) => addr = Some(parsed),
+                    Err(_) => return err(&format!("invalid address {value}")),
+                }
+                index += 2;
+            }
+            _ => return err("mcp expects [--root <path>] [--http <addr>]"),
+        }
+    }
+
+    let root = match root {
+        Some(root) => root,
+        None => match env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(e) => return err(&e.to_string()),
+        },
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => return err(&e.to_string()),
+    };
+
+    let result = match addr {
+        Some(addr) => match conjure_mcp::check_loopback(addr) {
+            Ok(()) => runtime.block_on(conjure_mcp::serve_http(root, addr)),
+            Err(e) => return err(&e),
+        },
+        None => runtime.block_on(conjure_mcp::serve_stdio(root)),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => err(&e),
+    }
 }
