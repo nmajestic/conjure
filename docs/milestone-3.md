@@ -1,6 +1,6 @@
 # Milestone 3 — tool-callable surface (`conjure-mcp`)
 
-**Status:** specified, not started
+**Status:** implemented
 **Depends on:** 1a–1c (generate/validate/repair/agent) and milestone 2 (save/list/export). MCP is a shell over those crates, not a second implementation.
 **Crate:** `conjure-mcp`. CLI gains `conjure mcp` only as a launcher.
 
@@ -128,20 +128,21 @@ Document, and add a commented example (not an enabled server — the owner turns
 
 ```jsonc
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
       "conjure": {
         "type": "local",
-        "command": ["cargo", "run", "-q", "-p", "conjure-mcp", "--", "--stdio"]
-      }
-    }
-  }
+        "command": ["cargo", "run", "-q", "-p", "conjure-mcp"],
+      },
+    },
+  },
 }
 ```
 
-Do not enable it in the committed `opencode.json` during this milestone. A committed MCP server that launches `cargo run` on every OpenCode start will surprise the owner and can recurse. The example lives in the doc. Enabling it is a manual step after `conjure mcp` is installed.
+This shape is verified against the OpenCode V2 MCP guide (https://opencode.ai/docs/mcp-servers); the snippet above is the verified V2 `mcp.servers` shape, not a sketch. Run it from the Conjure project root — the server locates `.conjure/` from its working directory, or pass `--root`.
 
-Confirm the exact `mcp.servers` shape against the V2 MCP guide at build time (`static-fire` must fetch https://opencode.ai/docs/mcp-servers). The snippet above is a sketch, not a verified schema.
+The committed `.opencode/opencode.json` does NOT enable this server. A committed MCP server that launches `cargo run` on every OpenCode start will surprise the owner and can recurse. The example lives in the doc. Enabling it is a manual step after `conjure mcp` is installed.
 
 ## Errors
 
@@ -189,6 +190,8 @@ If `rmcp` supports an in-process client, one integration test lists tools and ca
 - README and `architecture.md` current-state mention `conjure-mcp`.
 
 ## Open items to close in `static-fire` before building
+
+Closed at build time: rmcp 3.11 pinned; V2 config verified; single serve implementation shared by bin and `conjure mcp`; base64 with an 8 MiB encoded-PNG cap.
 
 1. `rmcp` API at the pinned version: stdio helper names, whether Streamable HTTP is a feature flag, tool macro shape. Fetch docs.rs / the SDK README. Do not design the handlers around a guessed macro.
 2. OpenCode MCP config schema (V2 guide), so the documented snippet is real.

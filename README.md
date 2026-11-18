@@ -6,7 +6,7 @@ Pixel art is easy to generate once and hard to generate consistently. Conjure tr
 
 ## Status
 
-Early development. Milestones 1a–1c and 2 are implemented and tested.
+Early development. Milestones 1a–1c, 2, and 3 are implemented and tested.
 
 | Milestone | What landed |
 |---|---|
@@ -14,8 +14,9 @@ Early development. Milestones 1a–1c and 2 are implemented and tested.
 | 1b | Model loop. The model emits an ASCII-row compact spec; core expands and verifies it; up to 3 repair turns, then a deterministic fallback. |
 | 1c | OpenCode as a provider. `conjure agent --provider opencode` drives `opencode run`. No API key in Conjure. |
 | 2 | Persistence and export: project-local `.conjure/` store (SQLite + content-addressed blobs), `save`/`ls`/`show`/`tag`/`gc`, indexed PNG + JSON manifest export. |
+| 3 | Tool-callable MCP server (`conjure-mcp`, official `rmcp` SDK): 12 tools over the same contracts; stdio default, loopback-only Streamable HTTP behind a flag; `conjure mcp` CLI launcher. |
 
-Still planned: [MCP](docs/milestone-3.md), and the Rune desktop app.
+Still planned: the Rune desktop app.
 
 ## Quick start
 
@@ -68,11 +69,14 @@ conjure show <hash-or-prefix>
 conjure export <hash-or-prefix>... --out <dir>
 conjure tag <hash-or-prefix> <tag>
 conjure gc
+conjure mcp [--root <path>] [--http 127.0.0.1:9711]
 ```
 
 `validate` prints a JSON report and exits 0 on pass, 1 on failure. Every other error exits 2. The model does not emit raw pixels. It emits a `CompactSpec`: one character per pixel, `'0'`–`'9'` and `'a'`–`'v'`, expanded by core into palette indices.
 
 `save` verifies before writing anything; a failed save exits 1 and prints the `ValidationReport` JSON on stdout. Hashes are content-addressed (BLAKE3); a hash prefix must be at least 8 hex characters and unambiguous. `export` writes an indexed-color PNG (`PLTE` palette, index 0 transparent via `tRNS`, via the `png` crate) plus a JSON manifest.
+
+`conjure mcp` starts the MCP server (stdio by default, `--http` binds loopback only — never a non-loopback address, never a token). It exposes the same verbs as tools: validate/expand/repair/generate/models and init/save/list/show/export. See [Milestone 3](docs/milestone-3.md) for the OpenCode `mcp.servers` snippet — it is documented there, not enabled in the committed config.
 
 ## Layout
 
@@ -84,7 +88,7 @@ conjure gc
 | `conjure-cli/` | Headless CLI over the crates above. |
 | `conjure-store/` | Project-local `.conjure/` store: SQLite metadata, content-addressed blobs, tags, gc. |
 | `conjure-export/` | Indexed-color PNG (`PLTE`/`tRNS`) and JSON manifest export. |
-| `conjure-mcp/` | Tool-callable MCP server (planned). |
+| `conjure-mcp/` | Tool-callable MCP server over the same contracts (rmcp). |
 | `conjure-app/` | Rune desktop UI (planned). |
 | `docs/` | Product brief, architecture, rules, milestone specs. |
 | `examples/demo/` | A dungeon tileset request (8×8, 3 tiles, 6-color palette). |
