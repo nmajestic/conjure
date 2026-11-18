@@ -175,6 +175,8 @@ may write `docs/orbital-survey.md`.
   user and does not start `abort`.
 - Direct standalone override: if the user explicitly invokes a single skill by
   name, run only that skill and halt on completion.
+- `flight-audit` is a standalone, strictly read-only audit. It is not part of
+  the seven-skill pipeline, never chains into it, and never edits source files.
 - `AGENTS.md` is the agent-facing summary of this workflow. When the skills
   suite changes, derive `AGENTS.md` from that suite and from the repository
   rules in this file. Do not leave the two in conflict.
