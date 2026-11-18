@@ -1,0 +1,11 @@
+[package]
+name = "conjure-export"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+conjure-core = { path = "../conjure-core" }
+png = "0.18"
+serde = "1"
+serde_json = "1"
+thiserror = "2"
