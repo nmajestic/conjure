@@ -149,28 +149,46 @@ app / mcp / cli  →  agent  →  inference + core  →  store / export
 ## 16. Mandatory build workflow
 
 Before building, implementing, scaffolding, refactoring, or generating any code
-or feature, execute the four-stage pipeline in strict order: `static-fire` →
-`liftoff` → `max-q` → `catch`. Do not create, modify, or delete files — or run
-build/install commands — until `static-fire` clears execution.
+or feature, execute the seven-skill pipeline in strict order:
+`mission-design` → `orbital-survey` → `static-fire` → `liftoff` → `max-q` →
+`catch`, with `abort` on failure recovery in pipeline mode only. Do not create, modify, or delete implementation files — or run build/install
+commands — until `static-fire` clears execution at `HIGH`. Before that gate,
+`mission-design` may write `docs/specs/<feature-slug>.md` and `orbital-survey`
+may write `docs/orbital-survey.md`.
 
 - Applies to new features, bug fixes, architectural changes, scripts, and
   config updates.
 - Skip only for read-only queries (explaining code, answering conceptual
   questions, inspecting logs).
-- Order: `static-fire` (confidence gate) → `liftoff` (implementation) →
-  `max-q` (adversarial review) → `catch` (audit & landing). Escalate per the
-  confidence policy if `static-fire` does not clear.
+- `mission-design` runs only for exploratory or under-specified requests, or
+  standalone via `"run mission-design"`. Concrete requests, and requests that
+  already have a matching spec in `docs/specs/`, start at `orbital-survey` /
+  `static-fire`.
+- `orbital-survey` runs before `static-fire` when `docs/orbital-survey.md` is
+  missing, stale, or lacks coverage for the target modules. It is the
+  reconnaissance writer of that map. `catch` may refresh the map on landing,
+  and `abort` may append a confirmed landmine, as specified in `AGENTS.md`.
+- Order after planning clears: `liftoff` (implementation) → `max-q` (3-pass
+  spec-compliance review) → `catch` (audit, map sync, and landing). `abort`
+  runs only in pipeline mode when `liftoff`, `max-q`, or `catch` exhausts its
+  retry cap or hits a blocking environment error. A standalone failure asks the
+  user and does not start `abort`.
 - Direct standalone override: if the user explicitly invokes a single skill by
   name, run only that skill and halt on completion.
+- `AGENTS.md` is the agent-facing summary of this workflow. When the skills
+  suite changes, derive `AGENTS.md` from that suite and from the repository
+  rules in this file. Do not leave the two in conflict.
 
 ## 17. Cross-project portability
 
 - Discover the repository's native test, lint, type-check, and build commands
   from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Makefile`, or
-  `.github/workflows`; never hardcode language-specific runners.
-- Scale fan-out to task size: 1 worker in `liftoff` and 1 combined reviewer in
-  `max-q` for small changes (1–2 files, < 50 lines); full parallel fan-out for
-  multi-file or cross-module changes.
-- The lowercase `<label>(<scope>): <description>` commit/PR standard is the
-  default; defer to repository-local `CONTRIBUTING.md`, commitlint configs, or
-  PR templates when present.
+  `.github/workflows`; never hardcode language-specific runners. The checks
+  this repo currently requires are in §10 and §11.
+- Scale fan-out to task size: 1 worker in `liftoff` for small changes (1–2
+  files, < 50 lines); full parallel fan-out for 3 or more files or 50 or more lines. `max-q` always runs 3 passes with 4 reviewers per pass.
+  `orbital-survey` uses 4 scouts, or 1–2 when the repo has fewer than 20
+  files. `abort` always uses 3 diagnostic sub-agents.
+- The lowercase `<label>(<scope>): <description>` commit/PR standard in §15 is
+  this repository's convention. Core skills must follow it here; they must not
+  invent a different format.
