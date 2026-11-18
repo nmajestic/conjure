@@ -6,15 +6,16 @@ Pixel art is easy to generate once and hard to generate consistently. Conjure tr
 
 ## Status
 
-Early development. Milestones 1a–1c are implemented and tested.
+Early development. Milestones 1a–1c and 2 are implemented and tested.
 
 | Milestone | What landed |
 |---|---|
 | 1a | Pure engine and headless verifier: spec, style card, indexed assets, deterministic generator, repair. |
 | 1b | Model loop. The model emits an ASCII-row compact spec; core expands and verifies it; up to 3 repair turns, then a deterministic fallback. |
 | 1c | OpenCode as a provider. `conjure agent --provider opencode` drives `opencode run`. No API key in Conjure. |
+| 2 | Persistence and export: project-local `.conjure/` store (SQLite + content-addressed blobs), `save`/`ls`/`show`/`tag`/`gc`, indexed PNG + JSON manifest export. |
 
-Still planned: [store and export](docs/milestone-2.md) (SQLite + content-addressed blobs, indexed PNG), [MCP](docs/milestone-3.md), and the Rune desktop app.
+Still planned: [MCP](docs/milestone-3.md), and the Rune desktop app.
 
 ## Quick start
 
@@ -28,6 +29,12 @@ Generate a placeholder tileset (no model) from the demo request:
 ```sh
 cargo run -p conjure-cli -- generate examples/demo/request.json 42 > /tmp/assets.json
 cargo run -p conjure-cli -- validate examples/demo/request.json /tmp/assets.json
+```
+
+```sh
+cargo run -p conjure-cli -- init
+cargo run -p conjure-cli -- save examples/demo/request.json /tmp/assets.json
+cargo run -p conjure-cli -- export <hash-prefix> --out build/ # from save output
 ```
 
 Generate with OpenCode (must be run from this repo so the `conjure` agent resolves):
@@ -54,9 +61,18 @@ conjure repair <request.json> <assets.json>
 conjure models
 conjure agent <request.json> --base-url <url> --model <id>
 conjure agent <request.json> --provider opencode --model <id>
+conjure init
+conjure save <request.json> <assets.json>
+conjure ls [--tag <tag>]
+conjure show <hash-or-prefix>
+conjure export <hash-or-prefix>... --out <dir>
+conjure tag <hash-or-prefix> <tag>
+conjure gc
 ```
 
 `validate` prints a JSON report and exits 0 on pass, 1 on failure. Every other error exits 2. The model does not emit raw pixels. It emits a `CompactSpec`: one character per pixel, `'0'`–`'9'` and `'a'`–`'v'`, expanded by core into palette indices.
+
+`save` verifies before writing anything; a failed save exits 1 and prints the `ValidationReport` JSON on stdout. Hashes are content-addressed (BLAKE3); a hash prefix must be at least 8 hex characters and unambiguous. `export` writes an indexed-color PNG (`PLTE` palette, index 0 transparent via `tRNS`, via the `png` crate) plus a JSON manifest.
 
 ## Layout
 
@@ -66,8 +82,8 @@ conjure agent <request.json> --provider opencode --model <id>
 | `conjure-inference/` | Local backends: OpenAI-compatible HTTP client and server discovery, plus the OpenCode CLI driver. |
 | `conjure-agent/` | Generate → validate → repair loop. No LLM framework. |
 | `conjure-cli/` | Headless CLI over the crates above. |
-| `conjure-store/` | Persistence and versioning (planned). |
-| `conjure-export/` | Indexed PNG and JSON manifest (planned). |
+| `conjure-store/` | Project-local `.conjure/` store: SQLite metadata, content-addressed blobs, tags, gc. |
+| `conjure-export/` | Indexed-color PNG (`PLTE`/`tRNS`) and JSON manifest export. |
 | `conjure-mcp/` | Tool-callable MCP server (planned). |
 | `conjure-app/` | Rune desktop UI (planned). |
 | `docs/` | Product brief, architecture, rules, milestone specs. |

@@ -34,7 +34,7 @@ failed in a way the agent can act on.
 | **Tool-callable surface** | **rmcp** (official MCP Rust SDK) | Exposes Conjure as an MCP server (stdio + Streamable HTTP). |
 | Async runtime | tokio | Needed for `reqwest` and `rmcp`. |
 | Serialization | serde + serde_json | Style Card, specs, manifests, tool schemas. |
-| **Pixel data** | `image` + `png` | PNG in/out; indexed-color PNG for palette-exact sprites. |
+| **Pixel data** | `png` (image-rs backend) | Indexed-color PNG with `PLTE` + `tRNS`. The `image` wrapper cannot encode indexed color — its own backend crate can, so we use `png` directly. |
 | Storage | SQLite via `rusqlite` | Metadata; sprite bytes on disk (content-addressed). |
 | Validation | Hand-rolled pure functions | The trust layer. |
 | Export | PNG + JSON manifest first | Then Godot/Unity/Aseprite. |
@@ -53,8 +53,8 @@ conjure/
   conjure-inference/  # backends: OpenAI-compatible HTTP client + local server discovery + OpenCode CLI (no API key)
   conjure-agent/      # hand-rolled agent loop, prompts, repair (no LLM framework)
   conjure-mcp/        # rmcp server wrapping core (tool-callable surface)
-  conjure-store/      # SQLite + file store, versioning
-  conjure-export/     # PNG/manifest/engine exporters
+  conjure-store/      # .conjure/ store: SQLite metadata, content-addressed blobs (implemented)
+  conjure-export/     # indexed PNG + JSON manifest exporters (implemented)
   conjure-cli/        # headless prove-the-loop
   conjure-app/        # Rune desktop app (last to build)
 ```
@@ -62,11 +62,12 @@ conjure/
 Dependencies point *inward*: `app`/`mcp`/`cli` → `agent` → `inference` + `core`;
 everything → `store`/`export`. `core` depends only on `serde`.
 
-**Current state:** milestones 1a, 1b, and 1c are implemented — `conjure-core`
-(including the `compact` module), `conjure-inference` (HTTP and OpenCode
-backends), `conjure-agent`, and `conjure-cli` (including the `models` and
-`agent` commands) all exist and are tested. `conjure-store`, `conjure-export`,
-`conjure-mcp`, and `conjure-app` are still planned.
+**Current state:** milestones 1a, 1b, 1c, and 2 are implemented —
+`conjure-core` (including the `compact` module), `conjure-inference` (HTTP and
+OpenCode backends), `conjure-agent`, `conjure-cli` (including `init`, `save`,
+`ls`, `show`, `export`, `tag`, `gc`), `conjure-store` (SQLite +
+content-addressed blob store), and `conjure-export` (indexed PNG + manifest)
+all exist and are tested. `conjure-mcp` and `conjure-app` are still planned.
 
 ## Inference layer — local, no API key (inspired by T3 Code)
 
@@ -176,7 +177,8 @@ AssetRequest┘        │                                            │
 3. **1c — OpenCode provider:** second `conjure-inference` backend that drives
    the local OpenCode agent CLI; still no API key.
 4. **2 — `conjure-store` + `conjure-export`:** persistence, versioning,
-   PNG/manifest export. Full spec: [milestone-2.md](milestone-2.md).
+   PNG/manifest export. Full spec: [milestone-2.md](milestone-2.md)
+   (implemented).
 5. **3 — `conjure-mcp`:** tool-callable surface. Full spec:
    [milestone-3.md](milestone-3.md).
 6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune.
