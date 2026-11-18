@@ -56,19 +56,27 @@ conjure/
   conjure-store/      # .conjure/ store: SQLite metadata, content-addressed blobs (implemented)
   conjure-export/     # indexed PNG + JSON manifest exporters (implemented)
   conjure-cli/        # headless prove-the-loop
-  conjure-app/        # Rune desktop app (last to build)
+  conjure-app/        # Rune desktop UI (browse, view, export, generate) (implemented)
 ```
 
 Dependencies point *inward*: `app`/`mcp`/`cli` → `agent` → `inference` + `core`;
 everything → `store`/`export`. `core` depends only on `serde`.
 
-**Current state:** milestones 1a, 1b, 1c, 2, and 3 are implemented —
+**Current state:** milestones 1a, 1b, 1c, 2, 3, and 4 are implemented —
 `conjure-core` (compact module), `conjure-inference` (HTTP + OpenCode
 backends), `conjure-agent`, `conjure-cli` (init/save/ls/show/export/tag/gc/mcp),
 `conjure-store` (SQLite + content-addressed blobs), `conjure-export` (indexed
-PNG + manifest), and `conjure-mcp` (tool-callable MCP server via rmcp; stdio
-default, loopback-only Streamable HTTP) all exist and are tested. Only
-`conjure-app` is still planned.
+PNG + manifest), `conjure-mcp` (tool-callable MCP server via rmcp; stdio
+default, loopback-only Streamable HTTP), and `conjure-app` (Rune desktop UI;
+library browser + pixel-exact viewer + export + generation cockpit;
+Linux-first, headless-tested via Rune's offscreen runtime) all exist and are
+tested. The numbered milestone list is now all implemented; what remains
+planned is engine-specific exporters (Godot/Unity) and packaging.
+
+Rune is consumed as a git dependency pinned to a dev revision (`1505f921…`)
+with the workspace-level `[patch.crates-io]` table. Linux builds need the
+`libxkbcommon`/`libwayland` dev packages; tests run headless offscreen
+(wgpu/Vulkan via the machine's ICD). The app is Linux-first in v1.
 
 ## Inference layer — local, no API key (inspired by T3 Code)
 
@@ -182,7 +190,8 @@ AssetRequest┘        │                                            │
    (implemented).
 5. **3 — `conjure-mcp`:** tool-callable surface. Full spec:
    [milestone-3.md](milestone-3.md) (implemented).
-6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune.
+6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune
+   (implemented).
 
 ## Risks
 

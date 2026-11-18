@@ -6,7 +6,7 @@ Pixel art is easy to generate once and hard to generate consistently. Conjure tr
 
 ## Status
 
-Early development. Milestones 1a–1c, 2, and 3 are implemented and tested.
+Early development. Milestones 1a–1c, 2, 3, and 4 are implemented and tested.
 
 | Milestone | What landed |
 |---|---|
@@ -15,8 +15,9 @@ Early development. Milestones 1a–1c, 2, and 3 are implemented and tested.
 | 1c | OpenCode as a provider. `conjure agent --provider opencode` drives `opencode run`. No API key in Conjure. |
 | 2 | Persistence and export: project-local `.conjure/` store (SQLite + content-addressed blobs), `save`/`ls`/`show`/`tag`/`gc`, indexed PNG + JSON manifest export. |
 | 3 | Tool-callable MCP server (`conjure-mcp`, official `rmcp` SDK): 12 tools over the same contracts; stdio default, loopback-only Streamable HTTP behind a flag; `conjure mcp` CLI launcher. |
+| 4 | Desktop app (`conjure-app`, Rune): library browser with pixel-exact viewer, export, and a generation cockpit streaming repair turns live; Linux-first, headless-tested. |
 
-Still planned: the Rune desktop app.
+Still planned: engine-specific exporters (Godot/Unity) and packaging.
 
 ## Quick start
 
@@ -36,7 +37,10 @@ cargo run -p conjure-cli -- validate examples/demo/request.json /tmp/assets.json
 cargo run -p conjure-cli -- init
 cargo run -p conjure-cli -- save examples/demo/request.json /tmp/assets.json
 cargo run -p conjure-cli -- export <hash-prefix> --out build/ # from save output
+cargo run -p conjure-app
 ```
+
+The desktop app opens the project's library (run it from the project directory; it locates `.conjure/` like the CLI).
 
 Generate with OpenCode (must be run from this repo so the `conjure` agent resolves):
 
@@ -89,7 +93,7 @@ conjure mcp [--root <path>] [--http 127.0.0.1:9711]
 | `conjure-store/` | Project-local `.conjure/` store: SQLite metadata, content-addressed blobs, tags, gc. |
 | `conjure-export/` | Indexed-color PNG (`PLTE`/`tRNS`) and JSON manifest export. |
 | `conjure-mcp/` | Tool-callable MCP server over the same contracts (rmcp). |
-| `conjure-app/` | Rune desktop UI (planned). |
+| `conjure-app/` | Rune desktop UI: browse, view, export, generate (Linux-first). |
 | `docs/` | Product brief, architecture, rules, milestone specs. |
 | `examples/demo/` | A dungeon tileset request (8×8, 3 tiles, 6-color palette). |
 
