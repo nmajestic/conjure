@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use conjure_core::{Asset, AssetKind, AssetRequest, StyleCard, ValidationReport, verify_request};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -45,6 +47,8 @@ pub struct GcReport {
 #[derive(Debug, Clone)]
 pub struct Verification(pub ValidationReport);
 
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,6 +70,60 @@ fn kind_label(kind: AssetKind) -> &'static str {
 
 fn is_hex_prefix(prefix: &str) -> bool {
     (8..=64).contains(&prefix.len()) && prefix.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_blob_hash_name(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn blob_matches(path: &Path, expected_hash: &str) -> Result<bool, StoreError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(blob_hash(&bytes) == expected_hash),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(StoreError::Io(e)),
+    }
+}
+
+fn write_blob_atomic(dir: &Path, hash: &str, bytes: &[u8]) -> Result<(), StoreError> {
+    let mut collision: Option<std::io::Error> = None;
+    for _ in 0..8 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|s| s.as_nanos())
+            .unwrap_or(0);
+        let temp_path = dir.join(format!(
+            "{hash}.{}.{}.{}.tmp",
+            std::process::id(),
+            nanos,
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                collision = Some(e);
+                continue;
+            }
+            Err(e) => return Err(StoreError::Io(e)),
+        };
+        let write_result = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file);
+        let write_result = write_result.and_then(|()| std::fs::rename(&temp_path, dir.join(hash)));
+        if let Err(e) = write_result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(StoreError::Io(e));
+        }
+        return Ok(());
+    }
+    Err(StoreError::Io(collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("temp name collision for blob {hash}"),
+        )
+    })))
 }
 
 impl Store {
@@ -102,6 +160,7 @@ impl Store {
     }
 
     fn setup(&mut self) -> Result<(), StoreError> {
+        self.conn.busy_timeout(Duration::from_secs(5))?;
         self.conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -147,9 +206,12 @@ impl Store {
         let blobs_dir = self.root.join(".conjure").join("blobs");
         let mut asset_hashes = Vec::with_capacity(assets.len());
         let mut blob_hashes = Vec::with_capacity(assets.len());
-        // Blobs are written before the transaction so an interrupted save can
-        // only leave orphan files (gc-able), never rows referencing missing
-        // blobs.
+        // Immediate transaction: the blob check and the row insert are
+        // serialized against gc's reference snapshot.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         for asset in assets {
             let asset_hash_value = asset_hash(
                 &request.style_card.id,
@@ -159,15 +221,12 @@ impl Store {
             );
             let blob_hash_value = blob_hash(&asset.pixels);
             let blob_path = blobs_dir.join(&blob_hash_value);
-            if !blob_path.exists() {
-                std::fs::write(blob_path, asset.pixels.as_slice())?;
+            if !blob_matches(&blob_path, &blob_hash_value)? {
+                write_blob_atomic(&blobs_dir, &blob_hash_value, &asset.pixels)?;
             }
             asset_hashes.push(asset_hash_value);
             blob_hashes.push(blob_hash_value);
         }
-        // Store hands out &self only, so unchecked_transaction is the only way
-        // to open a transaction without an exclusive connection borrow.
-        let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT OR IGNORE INTO style_cards(hash, id, name, json, saved_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -395,10 +454,19 @@ impl Store {
     }
 
     pub fn gc(&self) -> Result<GcReport, StoreError> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT blob_hash FROM assets")?;
-        let referenced: HashSet<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<HashSet<_>, _>>()?;
+        self.gc_with_grace(Duration::from_secs(3600))
+    }
+
+    pub fn gc_with_grace(&self, grace: Duration) -> Result<GcReport, StoreError> {
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let referenced: HashSet<String> = {
+            let mut stmt = tx.prepare("SELECT DISTINCT blob_hash FROM assets")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<HashSet<_>, _>>()?
+        };
         let mut report = GcReport {
             removed: 0,
             kept: 0,
@@ -411,13 +479,25 @@ impl Store {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
+            if !is_blob_hash_name(&name) {
+                continue;
+            }
             if referenced.contains(&name) {
                 report.kept += 1;
             } else {
-                std::fs::remove_file(entry.path())?;
-                report.removed += 1;
+                let modified = entry.metadata()?.modified()?;
+                let age = SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or_default();
+                if age < grace {
+                    report.kept += 1;
+                } else {
+                    std::fs::remove_file(entry.path())?;
+                    report.removed += 1;
+                }
             }
         }
+        tx.commit()?;
         Ok(report)
     }
 
@@ -732,13 +812,145 @@ mod tests {
             .unwrap();
 
         let blobs = root.0.join(".conjure").join("blobs");
-        std::fs::write(blobs.join("unreferenced-one"), b"junk").unwrap();
-        std::fs::write(blobs.join("unreferenced-two"), b"junk").unwrap();
+        std::fs::write(blobs.join("b".repeat(64)), b"junk").unwrap();
+        std::fs::write(blobs.join("c".repeat(64)), b"junk").unwrap();
 
-        let report = store.gc().unwrap();
+        let report = store.gc_with_grace(Duration::ZERO).unwrap();
         assert_eq!(report.removed, 2);
         assert_eq!(report.kept, 1);
         assert_eq!(blob_count(&root.0), 1);
+    }
+
+    #[test]
+    fn busy_timeout_is_set_on_open() {
+        let root = temp_root("busy-timeout");
+        Store::create(&root.0).unwrap();
+        let store = Store::open(&root.0).unwrap();
+        let timeout: i64 = store
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    #[test]
+    fn save_repairs_truncated_existing_blob() {
+        let root = temp_root("repair-truncated-blob");
+        let store = Store::create(&root.0).unwrap();
+        let request = sprite_request(2, 2);
+        let pixels = vec![0, 1, 1, 0];
+        let original = asset(2, 2, pixels.clone());
+        let hashes = store
+            .save_assets(&request, std::slice::from_ref(&original))
+            .unwrap();
+
+        let blob_path = root
+            .0
+            .join(".conjure")
+            .join("blobs")
+            .join(blob_hash(&pixels));
+        std::fs::write(&blob_path, b"x").unwrap();
+
+        store
+            .save_assets(&request, std::slice::from_ref(&original))
+            .unwrap();
+        assert_eq!(store.load_asset(&hashes[0]).unwrap(), original);
+    }
+
+    #[test]
+    fn save_leaves_no_temp_files() {
+        let root = temp_root("no-temp-files");
+        let store = Store::create(&root.0).unwrap();
+        store
+            .save_assets(&sprite_request(2, 2), &[asset(2, 2, vec![0, 1, 1, 0])])
+            .unwrap();
+
+        let blobs = root.0.join(".conjure").join("blobs");
+        let temp_files = std::fs::read_dir(&blobs)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(temp_files, 0);
+    }
+
+    #[test]
+    fn gc_skips_non_hex_names_and_young_blobs() {
+        let root = temp_root("gc-skips");
+        let store = Store::create(&root.0).unwrap();
+        let young_orphan = "a".repeat(64);
+        let blobs = root.0.join(".conjure").join("blobs");
+        std::fs::write(blobs.join(&young_orphan), b"orphan").unwrap();
+        std::fs::write(blobs.join("note.tmp"), b"note").unwrap();
+
+        let report = store.gc().unwrap();
+        assert_eq!(report.removed, 0);
+        assert!(blobs.join(&young_orphan).exists());
+        assert!(blobs.join("note.tmp").exists());
+    }
+
+    #[test]
+    fn save_concurrent_same_asset_succeeds() {
+        let root = temp_root("concurrent-save");
+        Store::create(&root.0).unwrap();
+        let request = sprite_request(2, 2);
+        let pixels = vec![0, 1, 1, 0];
+        let original = asset(2, 2, pixels.clone());
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let root = &root.0;
+                let request = &request;
+                let original = &original;
+                scope.spawn(move || {
+                    let store = Store::open(root).unwrap();
+                    store
+                        .save_assets(request, std::slice::from_ref(original))
+                        .unwrap();
+                });
+            }
+        });
+
+        let hash = asset_hash(&request.style_card.id, 2, 2, &pixels);
+        let store = Store::open(&root.0).unwrap();
+        assert_eq!(store.load_asset(&hash).unwrap(), original);
+    }
+
+    #[test]
+    fn gc_and_save_do_not_lose_referenced_blobs() {
+        for i in 0..20 {
+            let root = temp_root(&format!("gc-save-race-{i}"));
+            Store::create(&root.0).unwrap();
+            let request = sprite_request(2, 2);
+            let pixels = vec![0, 1, 1, 0];
+            let original = asset(2, 2, pixels.clone());
+            let hash = asset_hash(&request.style_card.id, 2, 2, &pixels);
+
+            let (save_outcome, gc_outcome) = std::thread::scope(|scope| {
+                let saver = {
+                    let root = &root.0;
+                    let request = &request;
+                    let original = &original;
+                    scope.spawn(move || {
+                        let store = Store::open(root).unwrap();
+                        store.save_assets(request, std::slice::from_ref(original))
+                    })
+                };
+                let cleaner = {
+                    let root = &root.0;
+                    scope.spawn(move || {
+                        let store = Store::open(root).unwrap();
+                        store.gc_with_grace(Duration::ZERO)
+                    })
+                };
+                (saver.join().unwrap(), cleaner.join().unwrap())
+            });
+            save_outcome.unwrap();
+            gc_outcome.unwrap();
+
+            let store = Store::open(&root.0).unwrap();
+            assert_eq!(store.load_asset(&hash).unwrap(), original);
+        }
     }
 
     #[test]

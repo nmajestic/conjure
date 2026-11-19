@@ -91,14 +91,21 @@ pub fn opencode_bin() -> String {
 }
 
 pub async fn list_opencode_models(bin: &str) -> Result<Vec<String>, String> {
+    list_opencode_models_with_timeout(bin, 30).await
+}
+
+pub async fn list_opencode_models_with_timeout(
+    bin: &str,
+    timeout_secs: u64,
+) -> Result<Vec<String>, String> {
     let child = spawn_opencode(bin, |cmd| {
         cmd.arg("models");
     })
     .await?;
 
-    let output = child
-        .wait_with_output()
+    let output = timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
         .await
+        .map_err(|_| format!("opencode models timed out after {timeout_secs}s"))?
         .map_err(|err| format!("opencode models failed to complete: {err}"))?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -673,6 +680,29 @@ fi
         let result = list_opencode_models(&missing.to_string_lossy()).await;
         let err = result.unwrap_err();
         assert!(err.contains("cannot run opencode"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_opencode_models_times_out() {
+        let _env = lock_env();
+        let stub = write_stub(
+            "models-timeout",
+            r#"#!/bin/sh
+if [ "$1" = "models" ]; then
+  sleep 30
+fi
+"#,
+        );
+        drop(_env);
+
+        let started = Instant::now();
+        let result = list_opencode_models_with_timeout(&stub.path.to_string_lossy(), 1).await;
+        let elapsed = started.elapsed();
+
+        let err = result.unwrap_err();
+        assert_eq!(err, "opencode models timed out after 1s");
+        assert!(elapsed < Duration::from_secs(10), "took {elapsed:?}");
     }
 
     #[tokio::test]
