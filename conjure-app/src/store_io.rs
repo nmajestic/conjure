@@ -60,8 +60,12 @@ pub fn initialize(state: &mut AppState) {
     refresh(state);
 }
 
-pub fn select(state: &mut AppState, hash: &str) {
-    let Some(row) = state.assets.iter().find(|row| row.hash == hash) else {
+pub fn select(state: &mut AppState, hash: &str, name: &str) {
+    let Some(row) = state
+        .assets
+        .iter()
+        .find(|row| row.hash == hash && row.name == name)
+    else {
         state.notice = Some(format!("no asset {hash}"));
         return;
     };
@@ -87,7 +91,7 @@ pub fn select(state: &mut AppState, hash: &str) {
             return;
         }
     };
-    state.selection = vec![hash.to_string()];
+    state.selection = vec![(hash.to_string(), name.to_string())];
     state.selected_card = Some(card_hash);
     match pixels::compose(&asset, &card, state.zoom) {
         Some(preview) => state.preview = Some(preview),
@@ -114,7 +118,7 @@ pub fn zoom(state: &mut AppState, delta: i32) {
         .unwrap_or(0);
     let next = (position as i32 + delta).rem_euclid(ZOOM_STEPS.len() as i32) as usize;
     state.zoom = ZOOM_STEPS[next];
-    let Some(hash) = state.selection.last().cloned() else {
+    let Some((hash, _name)) = state.selection.last().cloned() else {
         return;
     };
     let Some(row) = state.assets.iter().find(|row| row.hash == hash) else {
@@ -220,8 +224,12 @@ pub fn export(state: &mut AppState, dir: &Path) {
     }
     let mut picks: Vec<(String, String, String)> = Vec::with_capacity(state.selection.len());
     let mut missing: Option<String> = None;
-    for hash in &state.selection {
-        let Some(row) = state.assets.iter().find(|row| row.hash == *hash) else {
+    for (hash, name) in &state.selection {
+        let Some(row) = state
+            .assets
+            .iter()
+            .find(|row| row.hash == *hash && row.name == *name)
+        else {
             missing = Some(hash.clone());
             break;
         };
@@ -490,10 +498,17 @@ mod tests {
         let hashes = store.save_assets(&tileset_request(3), &tiles(3)).unwrap();
         let mut state = AppState::init_from(&root.0);
         let card_hash = state.assets[0].card_hash.clone();
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[1])
+            .unwrap()
+            .name
+            .clone();
 
-        select(&mut state, &hashes[1]);
+        select(&mut state, &hashes[1], &name);
 
-        assert_eq!(state.selection, vec![hashes[1].clone()]);
+        assert_eq!(state.selection, vec![(hashes[1].clone(), name)]);
         assert_eq!(state.selected_card.as_deref(), Some(card_hash.as_str()));
         let preview = state.preview.as_ref().unwrap();
         assert_eq!(preview.w, 2);
@@ -508,7 +523,14 @@ mod tests {
         let store = Store::create(&root.0).unwrap();
         let hashes = store.save_assets(&tileset_request(3), &tiles(3)).unwrap();
         let mut state = AppState::init_from(&root.0);
-        select(&mut state, &hashes[0]);
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[0])
+            .unwrap()
+            .name
+            .clone();
+        select(&mut state, &hashes[0], &name);
         assert!(state.preview.is_some());
 
         select_card(&mut state, "abcd1234");
@@ -524,7 +546,14 @@ mod tests {
         let store = Store::create(&root.0).unwrap();
         let hashes = store.save_assets(&tileset_request(3), &tiles(3)).unwrap();
         let mut state = AppState::init_from(&root.0);
-        select(&mut state, &hashes[0]);
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[0])
+            .unwrap()
+            .name
+            .clone();
+        select(&mut state, &hashes[0], &name);
 
         zoom(&mut state, 1);
         assert_eq!(state.zoom, 2);
@@ -556,11 +585,18 @@ mod tests {
         let mut state = AppState::init_from(&root.0);
         state.zoom = 8;
         let card_hash = state.assets[0].card_hash.clone();
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[0])
+            .unwrap()
+            .name
+            .clone();
 
-        select(&mut state, &hashes[0]);
+        select(&mut state, &hashes[0], &name);
 
         // Selection bookkeeping happens either way; only the preview refuses.
-        assert_eq!(state.selection, vec![hashes[0].clone()]);
+        assert_eq!(state.selection, vec![(hashes[0].clone(), name.clone())]);
         assert_eq!(state.selected_card.as_deref(), Some(card_hash.as_str()));
         assert!(state.preview.is_none());
         assert_eq!(
@@ -571,7 +607,7 @@ mod tests {
         // The same asset at zoom 1 is under the cap and composes fine.
         state.zoom = 1;
         state.notice = None;
-        select(&mut state, &hashes[0]);
+        select(&mut state, &hashes[0], &name);
         assert!(state.notice.is_none());
         let preview = state.preview.as_ref().unwrap();
         assert_eq!((preview.w, preview.h, preview.zoom), (2048, 2048, 1));
@@ -588,7 +624,14 @@ mod tests {
             )
             .unwrap();
         let mut state = AppState::init_from(&root.0);
-        select(&mut state, &hashes[0]);
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[0])
+            .unwrap()
+            .name
+            .clone();
+        select(&mut state, &hashes[0], &name);
         assert_eq!(state.preview.as_ref().unwrap().zoom, 1);
 
         // 2048x2048 at zoom 2 hits the cap exactly (16,777,216 px) and composes.
@@ -662,7 +705,7 @@ mod tests {
         for row in &state.assets {
             assets.push(store.load_asset(&row.hash).unwrap());
             names.push(row.name.clone());
-            state.selection.push(row.hash.clone());
+            state.selection.push((row.hash.clone(), row.name.clone()));
         }
 
         export(&mut state, &out_dir.0);
@@ -707,7 +750,21 @@ mod tests {
         other_asset.style_card_id = "card-2".into();
         let hashes_b = store.save_assets(&other, &[other_asset]).unwrap();
         let mut state = AppState::init_from(&root.0);
-        state.selection = vec![hashes_a[0].clone(), hashes_b[0].clone()];
+        let name_a = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes_a[0])
+            .unwrap()
+            .name
+            .clone();
+        let name_b = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes_b[0])
+            .unwrap()
+            .name
+            .clone();
+        state.selection = vec![(hashes_a[0].clone(), name_a), (hashes_b[0].clone(), name_b)];
 
         export(&mut state, &root.0.join("out"));
 
@@ -729,7 +786,14 @@ mod tests {
             )
             .unwrap();
         let mut state = AppState::init_from(&root.0);
-        state.selection = vec![hashes[0].clone()];
+        let name = state
+            .assets
+            .iter()
+            .find(|r| r.hash == hashes[0])
+            .unwrap()
+            .name
+            .clone();
+        state.selection = vec![(hashes[0].clone(), name)];
 
         export(&mut state, &root.0);
 
@@ -737,6 +801,46 @@ mod tests {
             state.export.message.as_deref(),
             Some("export output name \"../evil.png\" is unsafe")
         );
+    }
+
+    #[test]
+    fn export_uses_the_selected_name_for_shared_pixels() {
+        let root = temp_root("export-shared-name");
+        let out_dir = temp_root("export-shared-name-out");
+        let store = Store::create(&root.0).unwrap();
+        store
+            .save_assets(
+                &sprite_request("coin", 2, 2),
+                &[asset(2, 2, vec![0, 1, 1, 0])],
+            )
+            .unwrap();
+        store
+            .save_assets(
+                &sprite_request("hero", 2, 2),
+                &[asset(2, 2, vec![0, 1, 1, 0])],
+            )
+            .unwrap();
+        let mut state = AppState::init_from(&root.0);
+        let hash = state
+            .assets
+            .iter()
+            .find(|row| row.name == "hero")
+            .unwrap()
+            .hash
+            .clone();
+
+        select(&mut state, &hash, "hero");
+        export(&mut state, &out_dir.0);
+
+        let message = state.export.message.as_deref().unwrap();
+        let lines: Vec<&str> = message.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(!message.contains("error"), "got: {message}");
+        assert!(lines[0].ends_with("hero.png"), "got: {message}");
+        assert!(out_dir.0.join("hero.png").exists());
+        let json = std::fs::read_to_string(out_dir.0.join("hero.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest["frames"][0]["name"], "hero");
     }
 
     #[test]

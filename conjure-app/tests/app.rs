@@ -401,7 +401,19 @@ fn seeded_browse_and_select() {
     );
     assert_eq!(preview.zoom, 1);
     assert_eq!(preview.palette.len(), demo_card().palette.len());
-    assert_eq!(rt.state.selection, vec![hashes[0].clone()]);
+    assert_eq!(
+        rt.state.selection,
+        vec![(
+            hashes[0].clone(),
+            rt.state
+                .assets
+                .iter()
+                .find(|r| r.hash == hashes[0])
+                .unwrap()
+                .name
+                .clone()
+        )]
+    );
     let (rect, _) = rt.presented("preview").expect("the preview pane renders");
     assert!(rect[2] > 0.0 && rect[3] > 0.0, "the preview is non-empty");
 }

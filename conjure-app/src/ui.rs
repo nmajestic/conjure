@@ -177,7 +177,11 @@ fn library_panel(s: &AppState, t: Theme) -> El {
         for asset in &s.assets {
             let hash8 = hash8(&asset.hash).to_string();
             let asset_hash = asset.hash.clone();
-            let selected = s.selection.iter().any(|hash| hash == &asset.hash);
+            let asset_name = asset.name.clone();
+            let selected = s
+                .selection
+                .iter()
+                .any(|(h, n)| h == &asset.hash && n == &asset.name);
             let mut row_el = row()
                 .key(format!("browse-asset-{hash8}"))
                 .role("row")
@@ -196,7 +200,9 @@ fn library_panel(s: &AppState, t: Theme) -> El {
                 } else {
                     t.card
                 })
-                .on_press(move |s: &mut AppState| crate::store_io::select(s, &asset_hash))
+                .on_press(move |s: &mut AppState| {
+                    crate::store_io::select(s, &asset_hash, &asset_name)
+                })
                 .child(
                     text(format!(
                         "{} {} {}x{}",
@@ -241,9 +247,14 @@ fn preview_pane(s: &AppState, t: Theme) -> El {
                 .color(t.text_secondary),
         )
         .child(
-            text(s.selection.first().cloned().unwrap_or_default())
-                .font(type_::MONO_CAPTION)
-                .color(t.text_secondary),
+            text(
+                s.selection
+                    .first()
+                    .map(|(h, _)| h.clone())
+                    .unwrap_or_default(),
+            )
+            .font(type_::MONO_CAPTION)
+            .color(t.text_secondary),
         );
     let mut strip = row().key("swatches").gap(6.0);
     for (i, rgba) in p.palette.iter().enumerate() {

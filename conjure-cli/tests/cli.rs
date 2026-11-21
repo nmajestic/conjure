@@ -111,6 +111,84 @@ fn read_assets(dir: &Path) -> Vec<Asset> {
     parse_json(&text, "assets.json")
 }
 
+/// Writes a two-colour request with the given kind to `<dir>/<file>`.
+fn write_request(dir: &Path, file: &str, name: &str, kind: serde_json::Value) {
+    let request = serde_json::json!({
+        "name": name,
+        "kind": kind,
+        "style_card": {
+            "id": "pixel-card",
+            "name": "Pixel card",
+            "palette": [
+                { "name": "background", "hex": "#101010" },
+                { "name": "stone", "hex": "#6d6d6d" }
+            ],
+            "grid": { "tile_size": { "w": 2, "h": 2 }, "unit_scale": 1 },
+            "style": {
+                "outline": "none",
+                "outline_color": "#000000",
+                "shading": "flat",
+                "proportions": "chibi",
+                "era": "16-bit",
+                "theme": "dungeon"
+            }
+        }
+    });
+    let text = serde_json::to_string_pretty(&request)
+        .unwrap_or_else(|err| panic!("failed to serialize request {file}: {err}"));
+    fs::write(dir.join(file), text).unwrap_or_else(|err| panic!("failed to write {file}: {err}"));
+}
+
+fn pixel_asset(width: u32, height: u32, pixels: Vec<u8>) -> Asset {
+    Asset {
+        style_card_id: "pixel-card".to_string(),
+        width,
+        height,
+        pixels,
+    }
+}
+
+/// Saves `assets` under `request_file` and returns the asset hashes.
+fn save_custom(dir: &Path, request_file: &str, assets: &[Asset]) -> Vec<String> {
+    let assets_file = format!("{request_file}.assets.json");
+    let text = serde_json::to_string_pretty(assets)
+        .unwrap_or_else(|err| panic!("failed to serialize assets: {err}"));
+    fs::write(dir.join(&assets_file), text)
+        .unwrap_or_else(|err| panic!("failed to write {assets_file}: {err}"));
+    let save = run(dir, &["save", request_file, &assets_file]);
+    assert_eq!(code(&save), 0, "save failed: {}", stderr(&save));
+    let value: serde_json::Value = parse_json(&stdout(&save), "save output");
+    value
+        .get("asset_hashes")
+        .and_then(serde_json::Value::as_array)
+        .map(|hashes| {
+            hashes
+                .iter()
+                .filter_map(|hash| hash.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `export`, the given prefixes, then the given flags.
+fn export_args<'a>(prefixes: &'a [String], flags: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["export"];
+    args.extend(prefixes.iter().map(String::as_str));
+    args.extend_from_slice(flags);
+    args
+}
+
+/// An initialized project with the demo tileset saved; returns the three
+/// asset prefixes in asset order.
+fn saved_demo(label: &str) -> (PathBuf, TempProject, Vec<String>) {
+    let (dir, project) = setup_project(label);
+    let init = run(&dir, &["init"]);
+    assert_eq!(code(&init), 0, "init failed: {}", stderr(&init));
+    let (_, asset_hashes) = save_output_hashes(&dir);
+    let prefixes = asset_hashes.iter().map(|h| h[..16].to_string()).collect();
+    (dir, project, prefixes)
+}
+
 fn save_output_hashes(dir: &Path) -> (String, Vec<String>) {
     let save = run(dir, &["save", REQUEST, "assets.json"]);
     assert_eq!(code(&save), 0, "save failed: {}", stderr(&save));
@@ -402,5 +480,276 @@ fn export_refuses_unsafe_asset_names() {
     assert!(
         !dir.join("build").exists(),
         "refused export must not create the build directory"
+    );
+}
+
+// U3.1: four 2x2 tiles exported as a 2-column grid at scale 2 make an 8x8 sheet.
+#[test]
+fn export_grid_two_columns_scale_two() {
+    let (dir, _project) = setup_project("grid-two-columns");
+    write_request(
+        &dir,
+        "tiles.json",
+        "tiles",
+        serde_json::json!({ "type": "tileset", "tile_size": { "w": 2, "h": 2 }, "count": 4 }),
+    );
+    let tiles = vec![pixel_asset(2, 2, vec![0, 1, 1, 0]); 4];
+    let hashes = save_custom(&dir, "tiles.json", &tiles);
+    assert_eq!(hashes.len(), 4, "asset_hashes: {hashes:?}");
+    let prefixes: Vec<String> = hashes.iter().map(|h| h[..16].to_string()).collect();
+
+    let export = run(
+        &dir,
+        &export_args(
+            &prefixes,
+            &[
+                "--layout",
+                "grid",
+                "--columns",
+                "2",
+                "--scale",
+                "2",
+                "--out",
+                "build",
+            ],
+        ),
+    );
+    assert_eq!(code(&export), 0, "export failed: {}", stderr(&export));
+
+    let png_bytes = fs::read(dir.join("build").join("tiles.png"))
+        .unwrap_or_else(|err| panic!("failed to read exported png: {err}"));
+    let decoded = conjure_export::decode_indexed_png(&png_bytes)
+        .unwrap_or_else(|err| panic!("failed to decode exported png: {err:?}"));
+    assert_eq!(decoded.width, 8);
+    assert_eq!(decoded.height, 8);
+
+    let manifest_text = fs::read_to_string(dir.join("build").join("tiles.json"))
+        .unwrap_or_else(|err| panic!("failed to read exported manifest: {err}"));
+    let manifest: Manifest = parse_json(&manifest_text, "tiles.json");
+    assert_eq!(manifest.image.layout, "grid");
+    assert_eq!(manifest.image.png_width, 8);
+    assert_eq!(manifest.image.png_height, 8);
+}
+
+// U3.2: --layout grid without --columns is refused before any export runs.
+#[test]
+fn export_grid_without_columns_refused() {
+    let (dir, _project, prefixes) = saved_demo("grid-no-columns");
+
+    let export = run(
+        &dir,
+        &export_args(&prefixes, &["--layout", "grid", "--out", "build"]),
+    );
+    assert_eq!(code(&export), 2, "export stderr: {}", stderr(&export));
+    assert!(
+        stderr(&export).contains("grid layout requires --columns"),
+        "export stderr: {}",
+        stderr(&export)
+    );
+    assert!(!dir.join("build").exists());
+}
+
+// U3.3: --columns without --layout grid is refused.
+#[test]
+fn export_columns_without_grid_refused() {
+    let (dir, _project, prefixes) = saved_demo("columns-no-grid");
+
+    let export = run(
+        &dir,
+        &export_args(&prefixes, &["--columns", "2", "--out", "build"]),
+    );
+    assert_eq!(code(&export), 2, "export stderr: {}", stderr(&export));
+    assert!(
+        stderr(&export).contains("--columns only applies to grid layout"),
+        "export stderr: {}",
+        stderr(&export)
+    );
+    assert!(!dir.join("build").exists());
+}
+
+// U3.4: an unknown layout name is refused and names the bad value.
+#[test]
+fn export_unknown_layout_refused() {
+    let (dir, _project, prefixes) = saved_demo("unknown-layout");
+
+    let export = run(
+        &dir,
+        &export_args(&prefixes, &["--layout", "diag", "--out", "build"]),
+    );
+    assert_eq!(code(&export), 2, "export stderr: {}", stderr(&export));
+    assert!(
+        stderr(&export).contains("unknown layout diag"),
+        "export stderr: {}",
+        stderr(&export)
+    );
+    assert!(!dir.join("build").exists());
+}
+
+// U3.5: omitting the layout flags is the same as strip_horizontal at scale 1.
+#[test]
+fn export_default_matches_explicit_strip() {
+    let (dir, _project, prefixes) = saved_demo("default-strip");
+
+    let default = run(&dir, &export_args(&prefixes, &["--out", "default"]));
+    assert_eq!(code(&default), 0, "default export: {}", stderr(&default));
+    let explicit = run(
+        &dir,
+        &export_args(
+            &prefixes,
+            &[
+                "--layout",
+                "strip_horizontal",
+                "--scale",
+                "1",
+                "--out",
+                "explicit",
+            ],
+        ),
+    );
+    assert_eq!(code(&explicit), 0, "explicit export: {}", stderr(&explicit));
+
+    let default_png = fs::read(dir.join("default").join("demo.png"))
+        .unwrap_or_else(|err| panic!("failed to read default png: {err}"));
+    let explicit_png = fs::read(dir.join("explicit").join("demo.png"))
+        .unwrap_or_else(|err| panic!("failed to read explicit png: {err}"));
+    assert!(
+        default_png == explicit_png,
+        "default and explicit strip PNGs differ"
+    );
+}
+
+// U3.6: ls lists every name a shared-pixel asset is saved under, all with the
+// same hash prefix.
+#[test]
+fn ls_lists_each_name_for_shared_pixels() {
+    let dir = nonce_dir("ls-shared-pixels");
+    fs::create_dir(&dir)
+        .unwrap_or_else(|err| panic!("failed to create project dir {}: {err}", dir.display()));
+    let _project = TempProject(dir.clone());
+    let init = run(&dir, &["init"]);
+    assert_eq!(code(&init), 0, "init failed: {}", stderr(&init));
+
+    let pixels = vec![0, 1, 1, 0];
+    write_request(
+        &dir,
+        "coin.json",
+        "coin",
+        serde_json::json!({ "type": "sprite", "size": { "w": 2, "h": 2 } }),
+    );
+    write_request(
+        &dir,
+        "floor.json",
+        "floor",
+        serde_json::json!({ "type": "tileset", "tile_size": { "w": 2, "h": 2 }, "count": 2 }),
+    );
+    let coin_hashes = save_custom(&dir, "coin.json", &[pixel_asset(2, 2, pixels.clone())]);
+    assert_eq!(coin_hashes.len(), 1, "coin hashes: {coin_hashes:?}");
+    let floor_hashes = save_custom(
+        &dir,
+        "floor.json",
+        &[
+            pixel_asset(2, 2, pixels.clone()),
+            pixel_asset(2, 2, pixels.clone()),
+        ],
+    );
+    assert_eq!(floor_hashes, vec![coin_hashes[0].clone(); 2]);
+
+    let list = run(&dir, &["ls"]);
+    assert_eq!(code(&list), 0, "ls failed: {}", stderr(&list));
+    let list_out = stdout(&list);
+    let lines = asset_lines(&list_out);
+    let coin_line = lines
+        .iter()
+        .find(|line| line.contains("coin"))
+        .unwrap_or_else(|| panic!("no coin line in ls: {list_out}"));
+    let floor_line = lines
+        .iter()
+        .find(|line| line.contains("floor#0"))
+        .unwrap_or_else(|| panic!("no floor#0 line in ls: {list_out}"));
+    let floor1_line = lines
+        .iter()
+        .find(|line| line.contains("floor#1"))
+        .unwrap_or_else(|| panic!("no floor#1 line in ls: {list_out}"));
+    assert_eq!(lines.len(), 3, "ls assets section: {list_out}");
+
+    let prefix = &coin_hashes[0][..16];
+    let coin_hash = coin_line.split_whitespace().nth(3).unwrap_or_default();
+    let floor_hash = floor_line.split_whitespace().nth(3).unwrap_or_default();
+    let floor1_hash = floor1_line.split_whitespace().nth(3).unwrap_or_default();
+    assert_eq!(coin_hash, prefix, "coin line: {coin_line}");
+    assert_eq!(floor_hash, prefix, "floor#0 line: {floor_line}");
+    assert_eq!(floor1_hash, prefix, "floor#1 line: {floor1_line}");
+}
+
+// U3.7: a horizontal strip of mixed heights is refused under default options.
+#[test]
+fn export_mixed_sizes_refused() {
+    let (dir, _project) = setup_project("mixed-sizes");
+    write_request(
+        &dir,
+        "small.json",
+        "small",
+        serde_json::json!({ "type": "sprite", "size": { "w": 2, "h": 2 } }),
+    );
+    write_request(
+        &dir,
+        "big.json",
+        "big",
+        serde_json::json!({ "type": "sprite", "size": { "w": 3, "h": 3 } }),
+    );
+    let small = save_custom(&dir, "small.json", &[pixel_asset(2, 2, vec![0, 1, 1, 0])]);
+    let big = save_custom(&dir, "big.json", &[pixel_asset(3, 3, vec![0; 9])]);
+    let prefixes = vec![small[0][..16].to_string(), big[0][..16].to_string()];
+
+    let export = run(&dir, &export_args(&prefixes, &["--out", "build"]));
+    assert_eq!(code(&export), 2, "export stderr: {}", stderr(&export));
+    assert!(
+        stderr(&export).contains("horizontal strip requires equal heights"),
+        "export stderr: {}",
+        stderr(&export)
+    );
+    assert!(!dir.join("build").exists());
+}
+
+fn workspace_cargo(args: &[&str]) -> Output {
+    Command::new("cargo")
+        .args(args)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run cargo {args:?}: {err}"))
+}
+
+// U3.10: the whole workspace is clippy-clean with warnings denied.
+#[test]
+fn workspace_clippy_clean() {
+    let output = workspace_cargo(&[
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ]);
+    assert_eq!(code(&output), 0, "clippy stderr: {}", stderr(&output));
+}
+
+// U3.11: the whole workspace is rustfmt-clean.
+#[test]
+fn workspace_fmt_clean() {
+    let output = workspace_cargo(&["fmt", "--all", "--", "--check"]);
+    assert_eq!(code(&output), 0, "fmt stdout: {}", stdout(&output));
+}
+
+// U3.8: a prefix without --out keeps the original usage error.
+#[test]
+fn export_missing_out_usage_unchanged() {
+    let (dir, _project, prefixes) = saved_demo("missing-out");
+
+    let export = run(&dir, &export_args(&prefixes[..1], &[]));
+    assert_eq!(code(&export), 2, "export stderr: {}", stderr(&export));
+    assert!(
+        stderr(&export).contains("export expects <hash-or-prefix>... --out <dir>"),
+        "export stderr: {}",
+        stderr(&export)
     );
 }

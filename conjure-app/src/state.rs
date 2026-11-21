@@ -76,7 +76,7 @@ pub struct AppState {
     pub cards: Vec<CardRow>,
     pub assets: Vec<AssetRow>,
     pub selected_card: Option<String>,
-    pub selection: Vec<String>,
+    pub selection: Vec<(String, String)>,
     pub preview: Option<Preview>,
     pub zoom: u32,
     pub export: ExportPanel,

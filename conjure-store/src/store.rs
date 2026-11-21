@@ -168,6 +168,29 @@ impl Store {
              CREATE TABLE IF NOT EXISTS assets(hash TEXT PRIMARY KEY, style_card_hash TEXT NOT NULL REFERENCES style_cards(hash), name TEXT NOT NULL, kind TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, blob_hash TEXT NOT NULL, saved_at INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS tags(asset_hash TEXT NOT NULL REFERENCES assets(hash), tag TEXT NOT NULL, PRIMARY KEY(asset_hash, tag));",
         )?;
+        let has_asset_names: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'asset_names'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !has_asset_names {
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS asset_names(asset_hash TEXT NOT NULL REFERENCES assets(hash), name TEXT NOT NULL, PRIMARY KEY(asset_hash, name));",
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_names(asset_hash, name) SELECT hash, name FROM assets",
+                [],
+            )?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -249,13 +272,17 @@ impl Store {
                 params![
                     asset_hashes[i],
                     style_hash,
-                    name,
+                    name.clone(),
                     kind_label(request.kind),
                     asset.width,
                     asset.height,
                     blob_hashes[i],
                     now_secs()
                 ],
+            )?;
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_names(asset_hash, name) VALUES (?1, ?2)",
+                params![asset_hashes[i], name],
             )?;
         }
         tx.commit()?;
@@ -394,12 +421,12 @@ impl Store {
     pub fn list_assets(&self, filter: &ListFilter) -> Result<Vec<AssetSummary>, StoreError> {
         let sql = match filter.tag {
             Some(_) => {
-                "SELECT hash, style_card_hash, name, kind, width, height, saved_at FROM assets \
-                 WHERE hash IN (SELECT asset_hash FROM tags WHERE tag = ?1) ORDER BY name, hash"
+                "SELECT a.hash, a.style_card_hash, n.name, a.kind, a.width, a.height, a.saved_at FROM asset_names n JOIN assets a ON a.hash = n.asset_hash \
+                 WHERE a.hash IN (SELECT asset_hash FROM tags WHERE tag = ?1) ORDER BY n.name, a.hash"
             }
             None => {
-                "SELECT hash, style_card_hash, name, kind, width, height, saved_at FROM assets \
-                 ORDER BY name, hash"
+                "SELECT a.hash, a.style_card_hash, n.name, a.kind, a.width, a.height, a.saved_at FROM asset_names n JOIN assets a ON a.hash = n.asset_hash \
+                 ORDER BY n.name, a.hash"
             }
         };
         let mut stmt = self.conn.prepare(sql)?;
@@ -1142,5 +1169,162 @@ mod tests {
         let all = store.list_assets(&ListFilter { tag: None }).unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|s| s.hash == second[0]));
+    }
+
+    #[test]
+    fn keeps_both_names_for_identical_content() {
+        let root = temp_root("keeps-both-names");
+        let store = Store::create(&root.0).unwrap();
+        let pixels = vec![0, 1, 1, 0];
+        let coin = AssetRequest {
+            name: "coin".into(),
+            ..sprite_request(2, 2)
+        };
+        let sprite_hashes = store
+            .save_assets(&coin, &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        let floor_hashes = store
+            .save_assets(
+                &tileset_request(2),
+                &[asset(2, 2, pixels.clone()), asset(2, 2, pixels.clone())],
+            )
+            .unwrap();
+        assert_eq!(floor_hashes[0], sprite_hashes[0]);
+        assert_eq!(floor_hashes[1], sprite_hashes[0]);
+
+        let rows = store.list_assets(&ListFilter { tag: None }).unwrap();
+        assert_eq!(rows.len(), 3);
+        let names: Vec<&str> = rows.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["coin", "floor#0", "floor#1"]);
+        assert!(rows.iter().all(|s| s.hash == sprite_hashes[0]));
+    }
+
+    #[test]
+    fn resave_under_new_name_adds_only_a_name_row() {
+        let root = temp_root("new-name-row");
+        let store = Store::create(&root.0).unwrap();
+        let pixels = vec![0, 1, 1, 0];
+        let coin = AssetRequest {
+            name: "coin".into(),
+            ..sprite_request(2, 2)
+        };
+        let first = store
+            .save_assets(&coin, &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        let second = store
+            .save_assets(&sprite_request(2, 2), &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        assert_eq!(first, second);
+
+        let rows = store.list_assets(&ListFilter { tag: None }).unwrap();
+        let names: Vec<&str> = rows.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["coin", "hero"]);
+        assert!(rows.iter().all(|s| s.hash == first[0]));
+        assert_eq!(blob_count(&root.0), 1);
+
+        let assets: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(assets, 1);
+    }
+
+    #[test]
+    fn migration_backfills_asset_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("migrate-names");
+        let store = Store::create(&root.0).unwrap();
+        let coin = AssetRequest {
+            name: "coin".into(),
+            ..sprite_request(2, 2)
+        };
+        store
+            .save_assets(&coin, &[asset(2, 2, vec![0, 1, 1, 0])])
+            .unwrap();
+        store.conn.execute("DROP TABLE asset_names", []).unwrap();
+        drop(store);
+
+        let store = Store::open(&root.0).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM asset_names", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let name: String = store
+            .conn
+            .query_row("SELECT name FROM asset_names", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "coin");
+
+        let db_path = root.0.join(".conjure").join("conjure.sqlite");
+        std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let readonly_store = Store::open(&root.0).unwrap();
+        readonly_store
+            .list_assets(&ListFilter { tag: None })
+            .unwrap();
+        std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn resave_same_name_leaves_name_rows_unchanged() {
+        let root = temp_root("same-name-resave");
+        let store = Store::create(&root.0).unwrap();
+        let coin = AssetRequest {
+            name: "coin".into(),
+            ..sprite_request(2, 2)
+        };
+        let pixels = vec![0, 1, 1, 0];
+        store
+            .save_assets(&coin, &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        let name_rows: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM asset_names", [], |row| row.get(0))
+            .unwrap();
+        let saved_at: i64 = store
+            .conn
+            .query_row("SELECT saved_at FROM assets", [], |row| row.get(0))
+            .unwrap();
+
+        store
+            .save_assets(&coin, &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        let name_rows_again: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM asset_names", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name_rows_again, name_rows);
+        let saved_at_again: i64 = store
+            .conn
+            .query_row("SELECT saved_at FROM assets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(saved_at_again, saved_at);
+    }
+
+    #[test]
+    fn tag_filter_returns_every_name_row() {
+        let root = temp_root("tag-name-rows");
+        let store = Store::create(&root.0).unwrap();
+        let pixels = vec![0, 1, 1, 0];
+        let coin = AssetRequest {
+            name: "coin".into(),
+            ..sprite_request(2, 2)
+        };
+        let first = store
+            .save_assets(&coin, &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        store
+            .save_assets(&sprite_request(2, 2), &[asset(2, 2, pixels.clone())])
+            .unwrap();
+        store.tag(&first[0], "keep").unwrap();
+
+        let tagged = store
+            .list_assets(&ListFilter {
+                tag: Some("keep".into()),
+            })
+            .unwrap();
+        assert_eq!(tagged.len(), 2);
+        assert!(tagged.iter().all(|s| s.hash == first[0]));
     }
 }

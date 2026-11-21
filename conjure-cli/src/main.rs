@@ -455,8 +455,70 @@ fn run_export(args: &[String]) -> ExitCode {
     if args.len() < 3 || args[args.len() - 2] != "--out" {
         return err("export expects <hash-or-prefix>... --out <dir>");
     }
-    let prefixes = &args[..args.len() - 2];
+    let rest = &args[..args.len() - 2];
     let out_dir = std::path::PathBuf::from(&args[args.len() - 1]);
+    let mut prefixes: Vec<&str> = Vec::new();
+    let mut layout: Option<&str> = None;
+    let mut columns: Option<u32> = None;
+    let mut scale: Option<u32> = None;
+    let mut index = 0;
+    while index < rest.len() {
+        let token = rest[index].as_str();
+        if !token.starts_with("--") {
+            prefixes.push(token);
+            index += 1;
+            continue;
+        }
+        let value = rest.get(index + 1);
+        match token {
+            "--layout" => {
+                let Some(value) = value else {
+                    return err("--layout expects a value");
+                };
+                match value.as_str() {
+                    "strip_horizontal" | "grid" => layout = Some(value.as_str()),
+                    other => {
+                        return err(&format!(
+                            "unknown layout {other} (use strip_horizontal or grid)"
+                        ));
+                    }
+                }
+            }
+            "--columns" => {
+                let Some(value) = value else {
+                    return err("--columns expects a value");
+                };
+                match value.parse::<u32>() {
+                    Ok(n) => columns = Some(n),
+                    Err(_) => return err("--columns expects a whole number"),
+                }
+            }
+            "--scale" => {
+                let Some(value) = value else {
+                    return err("--scale expects a value");
+                };
+                match value.parse::<u32>() {
+                    Ok(n) => scale = Some(n),
+                    Err(_) => return err("--scale expects a whole number"),
+                }
+            }
+            other => return err(&format!("unknown export option {other}")),
+        }
+        index += 2;
+    }
+    if prefixes.is_empty() {
+        return err("export expects <hash-or-prefix>... --out <dir>");
+    }
+    let layout = match (layout, columns) {
+        (Some("grid"), None) => return err("grid layout requires --columns"),
+        (Some("grid"), Some(columns)) => conjure_export::SheetLayout::Grid { columns },
+        (_, None) => conjure_export::SheetLayout::StripHorizontal,
+        (_, Some(_)) => return err("--columns only applies to grid layout"),
+    };
+    let opts = conjure_export::ExportOpts {
+        layout,
+        scale: scale.unwrap_or(1),
+    };
     let store = match open_store() {
         Ok(s) => s,
         Err(e) => return err(&e),
@@ -494,7 +556,6 @@ fn run_export(args: &[String]) -> ExitCode {
         assets.push(asset);
         names.push(summary.name.clone());
     }
-    let opts = conjure_export::ExportOpts::default();
     let png = match conjure_export::export_png(&card, &assets, &opts) {
         Ok(p) => p,
         Err(e) => return err(&e.to_string()),

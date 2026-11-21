@@ -70,15 +70,17 @@ conjure init
 conjure save <request.json> <assets.json>
 conjure ls [--tag <tag>]
 conjure show <hash-or-prefix>
-conjure export <hash-or-prefix>... --out <dir>
+conjure export <hash-or-prefix>... [--layout strip_horizontal|grid] [--columns <n>] [--scale <1-16>] --out <dir>
 conjure tag <hash-or-prefix> <tag>
 conjure gc
 conjure mcp [--root <path>] [--http 127.0.0.1:9711]
 ```
 
+Defaults are a horizontal strip at scale 1, and mixed-size sets are refused because strips need equal heights and grids need uniform tiles.
+
 `validate` prints a JSON report and exits 0 on pass, 1 on failure. Every other error exits 2. The model does not emit raw pixels. It emits a `CompactSpec`: one character per pixel, `'0'`–`'9'` and `'a'`–`'v'`, expanded by core into palette indices.
 
-`save` verifies before writing anything; a failed save exits 1 and prints the `ValidationReport` JSON on stdout. Hashes are content-addressed (BLAKE3); a hash prefix must be at least 8 hex characters and unambiguous. `export` writes an indexed-color PNG (`PLTE` palette, index 0 transparent via `tRNS`, via the `png` crate) plus a JSON manifest.
+`save` verifies before writing anything; a failed save exits 1 and prints the `ValidationReport` JSON on stdout. Hashes are content-addressed (BLAKE3); a hash prefix must be at least 8 hex characters and unambiguous. `export` writes an indexed-color PNG (`PLTE` palette, index 0 transparent via `tRNS`, via the `png` crate) plus a JSON manifest. Identical pixels saved under different names keep every name, so `ls` shows one row per name.
 
 `conjure mcp` starts the MCP server (stdio by default, `--http` binds loopback only — never a non-loopback address, never a token). It exposes the same verbs as tools: validate/expand/repair/generate/models and init/save/list/show/export. See [Milestone 3](docs/milestone-3.md) for the OpenCode `mcp.servers` snippet — it is documented there, not enabled in the committed config.
 

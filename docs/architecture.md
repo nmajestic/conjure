@@ -70,7 +70,7 @@ PNG + manifest), `conjure-mcp` (tool-callable MCP server via rmcp; stdio
 default, loopback-only Streamable HTTP), and `conjure-app` (Rune desktop UI;
 library browser + pixel-exact viewer + export + generation cockpit;
 Linux-first, headless-tested via Rune's offscreen runtime) all exist and are
-tested. The numbered milestone list is now all implemented; what remains
+tested. `asset_names(asset_hash, name)` keeps every name an asset was saved under; `list_assets` returns one row per (asset, name), and identical pixels under different names share one blob and one asset row. The numbered milestone list is now all implemented; what remains
 planned is engine-specific exporters (Godot/Unity) and packaging.
 
 Rune is consumed as a git dependency pinned to a dev revision (`1505f921…`)
