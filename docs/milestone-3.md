@@ -189,7 +189,7 @@ If `rmcp` supports an in-process client, one integration test lists tools and ca
 - `conjure-core` untouched except a re-export if a type was crate-private and must be public (prefer already-public types; do not churn core).
 - README and `architecture.md` current-state mention `conjure-mcp`.
 
-## Open items to close in `static-fire` before building
+## Open items to close before building
 
 Closed at build time: rmcp 3.11 pinned; V2 config verified; single serve implementation shared by bin and `conjure mcp`; base64 with an 8 MiB encoded-PNG cap.
 
@@ -198,7 +198,7 @@ Closed at build time: rmcp 3.11 pinned; V2 config verified; single serve impleme
 3. Whether `conjure mcp` is a separate bin (`conjure-mcp`) that the CLI also invokes, or the CLI binary grows a subcommand and the MCP crate is a library the CLI calls. Recommended: `conjure-mcp` is a library + a tiny bin; `conjure mcp` in `conjure-cli` delegates to the same `serve()` function so there is one implementation.
 4. Base64 vs a file path for `conjure_export`. Recommended: base64, 8 MiB cap, no path writes.
 
-## Suggested build waves (for later `liftoff`)
+## Suggested build waves
 
 1. Crate scaffold + `serve_stdio` + the four verify/expand tools (no store, no model).
 2. `conjure_generate` / `conjure_generate_seeded` / `conjure_models` against existing backends.

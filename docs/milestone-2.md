@@ -305,13 +305,13 @@ CLI smoke (temp project):
 - `conjure-core` still depends only on `serde`. No new I/O in core.
 - Docs (`architecture.md` current-state, README layout table) updated in the same change.
 
-## Open items to close in `static-fire` before building
+## Open items to close before building
 
 1. Hash algorithm: BLAKE3 (recommended) vs SHA-256 (more ubiquitous, slower, fine at this size).
 2. Whether `.conjure/` is committed by convention only, or we add a `conjure.sqlite` note to the README and leave gitignore alone (recommended: leave gitignore alone).
 3. Sheet default for a tileset export: horizontal strip (recommended) vs square-ish grid.
 
-## Suggested build waves (for later `liftoff`)
+## Suggested build waves
 
 1. Store schema + `open`/`save`/`load` + hash tests.
 2. `list` / `tag` / `gc` + export PNG/manifest (disjoint files).
