@@ -130,67 +130,64 @@ app / mcp / cli  →  agent  →  inference + core  →  store / export
 
 ### Commit messages
 
-- Format: `<label>(<optional-scope>): <description>`
-- Strictly all lowercase (including the description), imperative present
-  tense, no trailing period.
+- Format: `<label>(<optional-scope>): <description>`, optionally followed by
+  one bracketed Overkill ID: a task (`[T3]`), a fix (`[F2]`) or a run
+  (`[0007]`).
+- Strictly all lowercase except the bracketed ID, imperative present tense, no
+  trailing period.
 - Allowed labels: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`,
-  `style`.
+  `style`, `revert`. `revert` is used when an approved plan revision undoes a
+  task.
 
 ### Pull requests
 
-- Title follows the same `<label>(<optional-scope>): <description>` format.
-- Keep PRs atomic to a single primary label and under ~400 lines of diff.
-- Required body sections: `## summary`, `## verification`, `## risks`.
+- Title follows the commit format, without an ID suffix.
+- Body follows Overkill's `open-pr` template: Summary, Acceptance criteria,
+  Checks, Review, Follow-ups and Record.
+- Keep PRs atomic to a single primary label and under ~400 lines of code diff.
+  `.record/` does not count toward the limit. `spec` splits an idea that would
+  exceed it into separate runs.
 
 ### Push
 
 - Never `git push` unless explicitly instructed.
+- Starting an Overkill run (`run-pipeline`) is the instruction to push that
+  run's own branch and open its pull request. Nothing else is pushed without
+  asking.
 
 ## 16. Mandatory build workflow
 
-Before building, implementing, scaffolding, refactoring, or generating any code
-or feature, execute the seven-skill pipeline in strict order:
-`mission-design` → `orbital-survey` → `static-fire` → `liftoff` → `max-q` →
-`catch`, with `abort` on failure recovery in pipeline mode only. Do not create, modify, or delete implementation files — or run build/install
-commands — until `static-fire` clears execution at `HIGH`. Before that gate,
-`mission-design` may write `docs/specs/<feature-slug>.md` and `orbital-survey`
-may write `docs/orbital-survey.md`.
+Every change goes through the Overkill pipeline, in order:
+`spec` → `plan` → `write-tests` → `implement` → `verify` → `review` →
+`open-pr`, run by `run-pipeline`. Do not create, modify, or delete
+implementation files until the spec and the plan are approved.
 
-- Applies to new features, bug fixes, architectural changes, scripts, and
-  config updates.
-- Skip only for read-only queries (explaining code, answering conceptual
+- Applies to new features, bug fixes, architectural changes, refactors,
+  scripts, config and docs. Every change runs all seven stages, however small.
+- Skip only for read-only requests (explaining code, answering conceptual
   questions, inspecting logs).
-- `mission-design` runs only for exploratory or under-specified requests, or
-  standalone via `"run mission-design"`. Concrete requests, and requests that
-  already have a matching spec in `docs/specs/`, start at `orbital-survey` /
-  `static-fire`.
-- `orbital-survey` runs before `static-fire` when `docs/orbital-survey.md` is
-  missing, stale, or lacks coverage for the target modules. It is the
-  reconnaissance writer of that map. `catch` may refresh the map on landing,
-  and `abort` may append a confirmed landmine, as specified in `AGENTS.md`.
-- Order after planning clears: `liftoff` (implementation) → `max-q` (3-pass
-  spec-compliance review) → `catch` (audit, map sync, and landing). `abort`
-  runs only in pipeline mode when `liftoff`, `max-q`, or `catch` exhausts its
-  retry cap or hits a blocking environment error. A standalone failure asks the
-  user and does not start `abort`.
 - Direct standalone override: if the user explicitly invokes a single skill by
-  name, run only that skill and halt on completion.
-- `flight-audit` is a standalone, strictly read-only audit. It is not part of
-  the seven-skill pipeline, never chains into it, and never edits source files.
-- `AGENTS.md` is the agent-facing summary of this workflow. When the skills
-  suite changes, derive `AGENTS.md` from that suite and from the repository
-  rules in this file. Do not leave the two in conflict.
+  name, run only that skill and stop.
+- Each run's spec, plan, tests, checks and review history is committed in
+  `.record/NNNN-<slug>/`.
+- Existing product specs in `docs/specs/` and the milestone docs are inputs to
+  `spec`. They do not replace it.
+- The skills come from <https://github.com/nmajestic/overkill_skills> and are
+  installed per machine, not stored in this repo. If they are not installed,
+  stop and ask; never imitate the pipeline from memory.
+- `AGENTS.md` is the agent-facing summary of this workflow. When this file or
+  the Overkill skills change, update `AGENTS.md` to match. Do not leave the
+  two in conflict.
 
-## 17. Cross-project portability
+## 17. Commands and CI
 
-- Discover the repository's native test, lint, type-check, and build commands
-  from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Makefile`, or
-  `.github/workflows`; never hardcode language-specific runners. The checks
-  this repo currently requires are in §10 and §11.
-- Scale fan-out to task size: 1 worker in `liftoff` for small changes (1–2
-  files, < 50 lines); full parallel fan-out for 3 or more files or 50 or more lines. `max-q` always runs 3 passes with 4 reviewers per pass.
-  `orbital-survey` uses 4 scouts, or 1–2 when the repo has fewer than 20
-  files. `abort` always uses 3 diagnostic sub-agents.
-- The lowercase `<label>(<scope>): <description>` commit/PR standard in §15 is
-  this repository's convention. Core skills must follow it here; they must not
-  invent a different format.
+- The checks this repo requires are in §10 and §11. Overkill's `plan` records
+  them and `verify` runs them on every change: `cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo fmt --all -- --check`, `cargo build --workspace` and `cargo audit`.
+- CI (`.github/workflows/ci.yml`) runs format, lint and test on every push to
+  `main` and every pull request.
+- On Linux, `conjure-app` needs `libxkbcommon-dev` to link, and its headless
+  UI tests need a Vulkan adapter (Mesa's `mesa-vulkan-drivers` without a GPU).
+- The commit and PR standard in §15 is this repository's convention. Overkill
+  follows it here and must not invent a different format.
