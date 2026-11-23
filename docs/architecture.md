@@ -1,204 +1,139 @@
-# Conjure — Architecture
+# Conjure: architecture
 
-This is the authoritative technical document for Conjure. It describes the
-stack, the crate layout, and the decisions behind them.
+How Conjure is built and why. The rules every change must follow are in
+[rules.md](rules.md). Formats and behavior of each part are in
+[reference/](reference/).
 
 ## Overview
 
-Conjure is a local-first, agent-first asset tool. The core loop is:
-
 ```
-spec → generate → validate → repair → ship
+style card ─┐
+            ├─▶ conjure-agent ──model call──▶ conjure-inference ──▶ local server or OpenCode
+request ────┘        │
+                     ▼
+              compact spec ──▶ conjure-core: expand ──▶ indexed assets ──▶ verify
+                                                                            │
+                                     fail: diagnostics back to the agent ◀──┤
+                                     pass ──▶ conjure-store / conjure-export
 ```
 
-The verifier is the trust layer: every output must pass, or report *why* it
-failed in a way the agent can act on.
+Three shells drive the same libraries the same way: the CLI, the MCP server
+and the desktop app.
 
-## Guiding principles
+## Crates
 
-1. **Core is UI-agnostic.** The engine is a pure library driven identically by
-   the CLI, MCP server, and Rune app.
-2. **The verifier is hand-rolled and exhaustively tested.**
-3. **Deterministic where it matters.** Same spec + seed = same asset.
-4. **Local-first, no API keys.** Conjure never runs a model; it drives the
-   user's local inference server.
+| Crate | What it does | Depends on |
+|---|---|---|
+| `conjure-core` | Style card, request, compact spec, assets, verifier, deterministic generator, repair. Pure. | `serde` |
+| `conjure-inference` | Model backends: a keyless OpenAI-compatible HTTP client with local server discovery, and an OpenCode CLI driver. | `reqwest`, `tokio` |
+| `conjure-agent` | The generate → verify → repair loop. | core, inference |
+| `conjure-store` | The project's `.conjure/` library: SQLite metadata and content-addressed pixel blobs. | core, `rusqlite`, `blake3` |
+| `conjure-export` | Indexed PNG sheets and JSON manifests. | core, `png` |
+| `conjure-cli` | The `conjure` command. | all libraries, mcp |
+| `conjure-mcp` | MCP server exposing the same operations as tools. | all libraries, `rmcp`, `axum` |
+| `conjure-app` | Rune desktop app: browse, preview, export, generate. | all libraries, `rune` |
 
-## The stack
+## Stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | Rust, edition 2024 | One language across UI, core, MCP, CLI. |
-| **UI** | **Rune** (git dep, pinned rev) | GPU-rendered (wgpu), Taffy layout, Parley text, spring animation; macOS/Win/Linux + WebGPU. Headless rendering lets an agent inspect and test the UI. |
-| **Inference client** | Hand-rolled `conjure-inference` (`reqwest` + `tokio`) | Two local backends: OpenAI-compatible client + local-server discovery, and an OpenCode CLI driver. No API key. |
-| **Agent loop** | Hand-rolled `conjure-agent` | Prompt → compact spec → expand → verify → repair. No LLM framework. |
-| **Tool-callable surface** | **rmcp** (official MCP Rust SDK) | Exposes Conjure as an MCP server (stdio + Streamable HTTP). |
-| Async runtime | tokio | Needed for `reqwest` and `rmcp`. |
-| Serialization | serde + serde_json | Style Card, specs, manifests, tool schemas. |
-| **Pixel data** | `png` (image-rs backend) | Indexed-color PNG with `PLTE` + `tRNS`. The `image` wrapper cannot encode indexed color — its own backend crate can, so we use `png` directly. |
-| Storage | SQLite via `rusqlite` | Metadata; sprite bytes on disk (content-addressed). |
-| Validation | Hand-rolled pure functions | The trust layer. |
-| Export | PNG + JSON manifest first | Then Godot/Unity/Aseprite. |
-| Testing | In-process mock OpenAI server + Rune headless render | Test the loop offline; verify the UI headlessly. |
+| Language | Rust, edition 2024 | One language for core, CLI, MCP and UI. |
+| UI | [Rune](https://github.com/anomalyco/rune), pinned git revision | GPU-rendered with wgpu, and it can render headlessly so the UI can be tested without a screen. |
+| HTTP | `reqwest` + `tokio` | `rmcp` needs tokio anyway, and the app streams progress. |
+| MCP | `rmcp` (official Rust SDK) | stdio and Streamable HTTP transports. |
+| Storage | SQLite (`rusqlite`, bundled) + files | Metadata in SQLite, pixels as content-addressed files. |
+| Hashing | BLAKE3 | Content addressing for assets, cards and blobs. |
+| Images | `png` | Writes indexed color (`PLTE` + `tRNS`) directly, which the `image` wrapper can't. |
+| Agent loop | Hand-rolled | No LLM framework; JSON reply, lenient parse, re-prompt on failure. |
 
-### HTTP client decision (2026-11-16)
+## Assets and the compact spec
 
-`reqwest` + `tokio`. We need tokio for `rmcp`/MCP anyway, and streaming matters
-for the desktop UI. Swapping clients later would be churn.
+An asset is a grid of indices into its style card's palette (2 to 32 colors).
+Palette fidelity is structural: an asset can't contain a color the palette
+doesn't have. Color is applied only at export.
 
-## Crate responsibilities
+Models never write pixel arrays. They write a `CompactSpec`: rows of text, one
+character per pixel, where `0`–`9` are palette indices 0–9 and `a`–`v` are
+10–31.
 
-```
-conjure/
-  conjure-core/       # Spec, StyleCard, asset model, verifier, generator, repair (pure, no I/O)
-  conjure-inference/  # backends: OpenAI-compatible HTTP client + local server discovery + OpenCode CLI (no API key)
-  conjure-agent/      # hand-rolled agent loop, prompts, repair (no LLM framework)
-  conjure-mcp/        # rmcp server wrapping core (tool-callable surface) (implemented)
-  conjure-store/      # .conjure/ store: SQLite metadata, content-addressed blobs (implemented)
-  conjure-export/     # indexed PNG + JSON manifest exporters (implemented)
-  conjure-cli/        # headless prove-the-loop
-  conjure-app/        # Rune desktop UI (browse, view, export, generate) (implemented)
+```json
+{"type": "sprite", "rows": ["0110", "1221", "1221", "0110"]}
+{"type": "tileset", "tiles": [["01", "10"], ["22", "22"]]}
 ```
 
-Dependencies point *inward*: `app`/`mcp`/`cli` → `agent` → `inference` + `core`;
-everything → `store`/`export`. `core` depends only on `serde`.
+`conjure_core::expand` turns it into assets strictly. A wrong row length,
+unknown character or index past the palette is an error message the agent
+sends back to the model.
 
-**Current state:** milestones 1a, 1b, 1c, 2, 3, and 4 are implemented —
-`conjure-core` (compact module), `conjure-inference` (HTTP + OpenCode
-backends), `conjure-agent`, `conjure-cli` (init/save/ls/show/export/tag/gc/mcp),
-`conjure-store` (SQLite + content-addressed blobs), `conjure-export` (indexed
-PNG + manifest), `conjure-mcp` (tool-callable MCP server via rmcp; stdio
-default, loopback-only Streamable HTTP), and `conjure-app` (Rune desktop UI;
-library browser + pixel-exact viewer + export + generation cockpit;
-Linux-first, headless-tested via Rune's offscreen runtime) all exist and are
-tested. The numbered milestone list is now all implemented; what remains
-planned is engine-specific exporters (Godot/Unity) and packaging.
+The verifier then checks the hard constraints: dimensions, pixel count,
+palette range and asset count. Each failure is a typed `Diagnostic` with a
+`DiagnosticCode`.
 
-Rune is consumed as a git dependency pinned to a dev revision (`1505f921…`)
-with the workspace-level `[patch.crates-io]` table. Linux builds need the
-`libxkbcommon`/`libwayland` dev packages; tests run headless offscreen
-(wgpu/Vulkan via the machine's ICD). The app is Linux-first in v1.
+## The agent loop
 
-## Inference layer — local, no API key (inspired by T3 Code)
+`conjure_agent::generate` runs up to `max_repairs + 1` model calls (3 repairs
+by default):
 
-Conjure does not run models and does not require an API key. It either speaks
-the OpenAI-compatible API to whatever local inference server the user already
-runs — Ollama, LM Studio, llama.cpp, vLLM, or SGLang — the way
-[T3 Code](https://github.com/MiaAI-Lab/t3code) does: a thin client that drives
-the user's server and discovers it automatically; or it drives the local
-OpenCode agent CLI (see Backends below).
+1. Send the system prompt and the request, asking for a compact spec as JSON.
+2. Parse the reply leniently (code fences and surrounding text are tolerated).
+   If it isn't valid JSON, say so and ask again.
+3. Expand the spec. If expansion fails, send the error back and ask again.
+4. Verify. If it passes, return. If not, send every diagnostic back and ask
+   again.
 
-- **`conjure-inference`**
-  - Keyless client (`Client::new(base_url, model)`): OpenAI-compatible
-    `chat/completions`, 180-second timeout, and **no `Authorization` header
-    ever** — there is no code path that could send an API key.
-  - **Local server discovery:** `discover(local_urls())` probes the usual
-    ports (Ollama `11434`, LM Studio `1234`, llama.cpp `8080`, vLLM `8000`)
-    and reads `GET /v1/models`.
-- **`conjure-agent`**
-  - The loop: build prompt (system + `AssetRequest`/`StyleCard`) → ask for a
-    **compact spec as JSON** → parse the reply leniently (code fences and
-    surrounding prose are tolerated) → expand strictly in core → verify →
-    feed failures back as repair turns (up to 3 by default) → deterministic
-    safety-net fallback (core `repair`/`generate`) if the model never
-    succeeds.
-  - Tested against an in-process `httpmock` mock OpenAI-compatible server —
-    never a real model.
+If no attempt passes, the deterministic fallback takes over: `repair` on the
+last expanded assets, or `generate` with seed 0 if nothing ever expanded. The
+result says how many repairs were used and whether the fallback ran.
 
-### Backends (milestone 1c, decided 2026-11-16)
+Progress is reported as events: model call, spec parsed, verify failed,
+repair turn, fallback engaged, passed. The desktop app shows them live.
 
-`conjure-inference` exposes a `Backend` enum with two variants:
+## Model backends
 
-- **`Http(Client)`** — unchanged from 1b: the keyless OpenAI-compatible client
-  for localhost servers, over `reqwest` + `tokio`.
-- **`OpenCode(OpenCodeCli)`** — drives the local OpenCode agent CLI as a
-  subprocess: `opencode run --format json --archived --model <provider/model>
-  --agent conjure`. The process is killed after 180 seconds. Output is NDJSON;
-  the reply text is read from `part.text` on `type:"text"` lines. The binary is
-  injectable via `CONJURE_OPENCODE_BIN`. Conjure never handles credentials —
-  OpenCode owns all auth. Multi-turn repair conversations are stateless: the
-  full history is folded into each run's prompt. A minimal no-tools `conjure`
-  agent is defined in the project `.opencode/opencode.json` — OpenCode
-  discovers that config from the working directory upward, so the CLI must
-  run from inside the Conjure project (known limitation: `--agent conjure`
-  does not resolve elsewhere).
+Conjure never runs a model and never holds a credential. It has two
+backends:
 
-**CLI surface (1b–1c):** `conjure models` lists both discovered local servers
-and OpenCode models; `conjure agent <request.json> --provider opencode --model
-<id>` runs the agent loop through the OpenCode backend. The HTTP path is
-unchanged from 1b: `conjure agent <request.json> --base-url <url> --model <id>`.
+- **HTTP:** a keyless OpenAI-compatible client for local servers. It never
+  sends an `Authorization` header and times out after 180 seconds. Discovery
+  probes Ollama (`11434`), LM Studio (`1234`), llama.cpp (`8080`) and vLLM
+  (`8000`) on localhost and reads `/v1/models`. Any other OpenAI-compatible
+  server works through `--base-url`.
+- **OpenCode:** runs `opencode run --format json --archived --model <id>
+  --agent conjure` as a subprocess, killed after 180 seconds, and reads the
+  reply from its JSON output. OpenCode owns all auth. Each repair turn resends
+  the whole conversation, since runs are stateless. The binary can be
+  overridden with `CONJURE_OPENCODE_BIN`.
 
-**What we give up vs. Rig, and how we replace it:**
+The `conjure` OpenCode agent is defined in `.opencode/opencode.json` with every
+tool denied. OpenCode finds that file by searching upward from the working
+directory, so the OpenCode backend only works when run from inside this
+repository.
 
-| Rig feature | Our replacement |
+## The desktop app at runtime
+
+Rune owns the UI thread. A background thread runs a tokio runtime for
+generation. The UI sends commands over a channel, and generation events come
+back as state updates. Cancelling aborts the running task. Details:
+[reference/desktop-app.md](reference/desktop-app.md).
+
+## Decisions
+
+| Date | Decision |
 |---|---|
-| Multi-provider abstraction | Not needed — local backends only (OpenAI-compatible servers, OpenCode CLI) |
-| Structured extraction | "Return JSON" + lenient parse + re-prompt on failure |
-| `mock`/`cassette` test harness | In-process mock OpenAI-compatible server |
-
-## Asset representation (decided)
-
-**Indexed pixels + palette map.** Each sprite is a grid of indices into the
-Style Card palette. Palette fidelity is structural; sprites are tiny and
-diffable; PNG export is a deterministic index → RGBA expansion.
-
-**The model does not emit raw grids.** It emits a `CompactSpec` (decided
-2026-11-16, implemented in `conjure-core::compact`): ASCII rows, one char per
-pixel. Chars `'0'..='9'` map to palette indices 0–9 and `'a'..='v'` to
-indices 10–31 (32 colors max). The variants mirror `AssetKind`: a sprite is
-`{"type":"sprite","rows":[...]}` and a tileset is
-`{"type":"tileset","tiles":[[...],...]}` (one row-list per tile).
-
-`conjure-core::compact::expand` expands the spec **strictly** into the
-indexed grid, then the verifier checks the result. Dimension, char, and
-palette-range errors are actionable messages that the agent feeds back as
-repair turns. The original fallback in this decision — the model emitting
-the grid as raw JSON index arrays — was considered and not chosen.
-
-## Runtime / threading model
-
-Rune runs the UI on its own thread; the agent and MCP server are async on a
-tokio runtime.
-
-- Rune app owns a background tokio runtime.
-- UI actions → commands over an mpsc channel.
-- Agent streams progress events back → Rune state updates.
-- MCP server runs headless (stdio) or alongside the app.
-
-## Data flow (end to end)
-
-```
-Style Card ─┐
-            ├─→ agent (conjure-agent) ─→ compact spec ─→ core expands → indexed Asset
-AssetRequest┘        │                                            │
-                     │  model call (conjure-inference → local server)
-                     ▼
-            verifier (conjure-core)
-            ┌── pass ──→ store/export
-            └── fail ──→ diagnostic ─→ agent repairs (bounded loop)
-```
-
-## Milestones
-
-1. **1a — `conjure-core` + deterministic generator + `repair` + `conjure-cli`:**
-   prove generate → validate → repair with no model at all (pure Rust).
-2. **1b — `conjure-inference` + `conjure-agent`:** swap the deterministic
-   generator for a real local model; still no API key.
-3. **1c — OpenCode provider:** second `conjure-inference` backend that drives
-   the local OpenCode agent CLI; still no API key.
-4. **2 — `conjure-store` + `conjure-export`:** persistence, versioning,
-   PNG/manifest export. Full spec: [milestone-2.md](milestone-2.md)
-   (implemented).
-5. **3 — `conjure-mcp`:** tool-callable surface. Full spec:
-   [milestone-3.md](milestone-3.md) (implemented).
-6. **4 — `conjure-app` (Rune):** desktop UI, headless-tested via Rune
-   (implemented).
+| 2026-11-16 | Indexed pixels plus a palette as the canonical asset form. |
+| 2026-11-16 | Models emit a compact text spec, not raw index arrays. |
+| 2026-11-16 | `reqwest` + `tokio` for HTTP. |
+| 2026-11-16 | Hand-rolled agent loop instead of an LLM framework (Rig). |
+| 2026-11-16 | OpenCode CLI as a second backend, so hosted models work without Conjure touching a key. |
+| 2026-11-16 | Project-local `.conjure/` library, content-addressed and immutable. |
+| 2026-11-16 | Indexed PNG export with palette index 0 transparent. |
+| 2026-11-18 | Desktop app uses the crates in-process (not as an MCP client); Linux first. |
 
 ## Risks
 
-- **Rune is pre-release** — API may shift; pin a rev and isolate it behind
-  `conjure-app`.
-- **Model grid reliability is unproven** — Milestones 1a/1b answer this
-  cheaply.
-- **Local-model capability varies** — mitigation: deterministic generator
-  first, bounded repair retries, deterministic safety-net repair.
-- **Rune needs `wgpu`/GPU** — CLI/MCP milestones stay headless.
+- **Rune is pre-release.** Its API may change. It is pinned to one revision and
+  used only by `conjure-app`.
+- **Local models vary in quality.** Mitigated by bounded repair turns and the
+  deterministic fallback.
+- **The app needs a GPU.** The CLI and MCP server don't, and the app's tests
+  run headlessly (on a software Vulkan driver when there's no GPU).

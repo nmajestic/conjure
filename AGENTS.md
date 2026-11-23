@@ -1,71 +1,84 @@
 # AGENTS.md
 
-Read [docs/codebase-rules.md](docs/codebase-rules.md) before making changes.
-Product vision: [docs/product-brief.md](docs/product-brief.md). Architecture: [docs/architecture.md](docs/architecture.md).
+How to make changes to Conjure. Every change also follows
+[docs/rules.md](docs/rules.md), including the most important one: Conjure
+never handles API keys or credentials.
 
-## Ground rules
+For context: [product](docs/product.md), [architecture](docs/architecture.md),
+and the [reference](docs/reference/) pages for the store, export, MCP server
+and desktop app.
 
-- No API keys, ever. Conjure requires no credentials and never stores or
-  transmits them; it talks to local OpenAI-compatible inference servers or
-  drives a local agent CLI (OpenCode), which owns all auth. No cloud endpoints,
-  secret handling, or key-assuming SDKs in Conjure.
-- The codebase rules (crate boundaries, a pure `conjure-core`, the verifier as
-  the trust layer, determinism, no comments unless needed) apply to every
-  change, and reviewers enforce them.
-
-## Build workflow: Overkill
+## Workflow: Overkill
 
 Every change goes through the [Overkill](https://github.com/nmajestic/overkill_skills)
-pipeline: features, bug fixes, refactors, scripts, config and docs alike. A
-one-line fix runs every stage too.
+pipeline, however small: features, fixes, refactors, scripts, config and docs.
 
-| # | Skill | What it does here |
+| # | Skill | What it does |
 |---|---|---|
-| 1 | `spec` | Turns the request into `.record/NNNN-<slug>/spec.md` with Given/When/Then acceptance criteria. The user approves it. |
-| 2 | `plan` | Explores the workspace, asks the user at every design fork, and writes tasks in parallel waves. The user approves it. |
+| 1 | `spec` | Writes `.record/NNNN-<slug>/spec.md` with Given/When/Then acceptance criteria. The user approves it. |
+| 2 | `plan` | Explores the code, asks the user at every design fork, and splits the work into tasks. The user approves it. |
 | 3 | `write-tests` | Writes a few failing tests from the acceptance criteria and commits them first. |
 | 4 | `implement` | Builds the tasks with parallel workers, one commit per task. |
-| 5 | `verify` | Runs every check below. Never changes code. |
-| 6 | `review` | 8 reviewer personas plus a verifier. Every finding is fixed. |
-| 7 | `open-pr` | Pushes the run's branch, opens the PR and fixes CI failures. Never merges. |
+| 5 | `verify` | Runs every check in [Commands](#commands). Never changes code. |
+| 6 | `review` | 8 reviewer personas, then a verifier. Every finding is fixed. |
+| 7 | `open-pr` | Pushes the run's branch, opens the pull request, fixes CI failures. Never merges. |
 
-- **Start a change** with `run-pipeline <request>`. It runs the stages in order,
-  stops only where the user decides, and resumes with `run-pipeline resume`.
-- **One skill on its own:** when the user names a single skill, run only that
-  skill and stop.
-- **Read-only requests** (explaining code, answering questions, inspecting
-  logs) skip the pipeline.
-- **The skills are not stored in this repo.** If they aren't available, stop
-  and ask the user to install them. Never imitate the pipeline from memory.
+- **Start** with `run-pipeline <request>`. Resume with `run-pipeline resume`.
+- **One skill:** when the user names a single skill, run only that skill.
+- **Read-only requests** (explaining code, answering questions, reading logs)
+  skip the pipeline.
+- **Don't write implementation code** until the spec and plan are approved.
+- **Records:** each run's spec, plan, tests, checks and review are committed in
+  `.record/NNNN-<slug>/`.
+- **The skills are installed per machine**, not stored here. If they aren't
+  available, stop and ask the user to install them. Never imitate the pipeline
+  from memory.
   - Claude Code: `/plugin marketplace add nmajestic/overkill_skills`, then
     `/plugin install overkill@nmajestic`.
   - OpenCode: clone `overkill_skills` and run `scripts/install.sh --tool opencode`.
 
-## Conjure specifics for Overkill
+## Commands
 
-- **Commands** `plan` records and `verify` runs:
+| Check | Command |
+|---|---|
+| test | `cargo test --workspace` |
+| lint | `cargo clippy --workspace --all-targets -- -D warnings` |
+| format | `cargo fmt --all -- --check` |
+| type-check | Covered by lint and build |
+| build | `cargo build --workspace` |
+| audit | `cargo audit` (install with `cargo install cargo-audit`) |
 
-  | Check | Command |
-  |---|---|
-  | test | `cargo test --workspace` |
-  | lint | `cargo clippy --workspace --all-targets -- -D warnings` |
-  | format | `cargo fmt --all -- --check` |
-  | type-check | Covered by clippy and build (N/A as a separate check) |
-  | build | `cargo build --workspace` |
-  | audit | `cargo audit` (install with `cargo install cargo-audit`) |
+CI (`.github/workflows/ci.yml`) runs format, lint and test on every push to
+`main` and every pull request.
 
-  CI runs format, lint and test in `.github/workflows/ci.yml`.
-- **Linux test dependencies:** `conjure-app` links `libxkbcommon` and its
-  headless UI tests need a Vulkan adapter. Without a GPU, install Mesa's
-  software driver: `sudo apt-get install libxkbcommon-dev mesa-vulkan-drivers libvulkan1`.
-- **Run records** live in `.record/NNNN-<slug>/` and are committed with the
-  change.
-- **Existing product docs** (`docs/specs/`, `docs/milestone-*.md`) are inputs
-  to `spec`, not substitutes for it.
-- **Git and PRs** follow [docs/codebase-rules.md §15](docs/codebase-rules.md):
-  lowercase `<label>(<scope>): <description>` with an optional Overkill ID
-  suffix like `[T3]`; Overkill's PR template; under ~400 lines of code diff,
-  not counting `.record/`. A `run-pipeline` run may push its own branch and
-  open its own PR. Nothing else is pushed without asking.
-- **Docs stay truthful:** when behavior or structure changes, update
-  `AGENTS.md` and `docs/` in the same change.
+**Linux:** `conjure-app` links `libxkbcommon`, and its headless UI tests need a
+Vulkan adapter. Without a GPU, use Mesa's software driver:
+`sudo apt-get install libxkbcommon-dev mesa-vulkan-drivers libvulkan1`.
+
+## Commits
+
+- `<label>(<optional-scope>): <description>`, optionally ending with one
+  Overkill ID: a task `[T3]`, a fix `[F2]` or a run `[0007]`.
+- All lowercase except the ID, imperative mood, no trailing period.
+- Labels: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `style`,
+  `revert` (for a task undone by an approved plan revision).
+
+## Pull requests
+
+- Title in the commit format, without an ID.
+- Body uses Overkill's `open-pr` template: Summary, Acceptance criteria,
+  Checks, Review, Follow-ups, Record.
+- One primary label, under about 400 lines of code diff. `.record/` doesn't
+  count. `spec` splits bigger ideas into separate runs.
+- Existing docs in `docs/` are inputs to `spec`, not a substitute for it.
+
+## Pushing
+
+- Never `git push` unless told to.
+- Starting `run-pipeline` counts as being told to push that run's own branch
+  and open its pull request. Nothing else is pushed without asking.
+
+## Keeping this file true
+
+This file is the only place the workflow is written down. When the workflow or
+the Overkill skills change, update it in the same change.
